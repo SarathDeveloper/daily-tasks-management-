@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -20,8 +20,10 @@ import { FinanceView } from './components/FinanceView';
 import { FinanceModal } from './components/FinanceModal';
 import { DebtModal } from './components/DebtModal';
 import { BillTemplateModal } from './components/BillTemplateModal';
+import { SavingsModal } from './components/SavingsModal';
 import { materializeRecurringTransactions } from './lib/financeRecurrence';
 import { materializeBillPayments } from './lib/billMaterializer';
+import { deriveStreakState } from './lib/savingsStreak';
 import { checkBudgetAlerts, formatAlertMessage } from './lib/budgetAlerts';
 import { DEFAULT_PAYMENT_METHOD } from './data/financeCategories';
 import { NotificationBanner } from './components/NotificationBanner';
@@ -49,6 +51,8 @@ const DEFAULT_STORAGE_KEY_SAVINGS = 'daily_finance_savings_goals_v1';
 const DEFAULT_STORAGE_KEY_ALERT_STATE = 'daily_finance_alert_state_v1';
 const DEFAULT_STORAGE_KEY_BILL_TEMPLATES = 'daily_finance_bill_templates_v1';
 const DEFAULT_STORAGE_KEY_BILL_PAYMENTS = 'daily_finance_bill_payments_v1';
+const DEFAULT_STORAGE_KEY_SAVINGS_ENTRIES = 'daily_finance_savings_entries_v1';
+const DEFAULT_STORAGE_KEY_SAVINGS_STREAK = 'daily_finance_savings_streak_v1';
 const STORAGE_KEY_SETTINGS = 'daily_tasks_settings_v1';
 
 export default function App() {
@@ -95,6 +99,8 @@ export default function App() {
   const userAlertStateKey = currentUser ? `daily_finance_alert_state_${currentUser.id}` : DEFAULT_STORAGE_KEY_ALERT_STATE;
   const userBillTemplatesKey = currentUser ? `daily_finance_bill_templates_${currentUser.id}` : DEFAULT_STORAGE_KEY_BILL_TEMPLATES;
   const userBillPaymentsKey = currentUser ? `daily_finance_bill_payments_${currentUser.id}` : DEFAULT_STORAGE_KEY_BILL_PAYMENTS;
+  const userSavingsEntriesKey = currentUser ? `daily_finance_savings_entries_${currentUser.id}` : DEFAULT_STORAGE_KEY_SAVINGS_ENTRIES;
+  const userSavingsStreakKey = currentUser ? `daily_finance_savings_streak_${currentUser.id}` : DEFAULT_STORAGE_KEY_SAVINGS_STREAK;
 
   // 1. Core State
   const [tasks, setTasks] = useState<Task[]>(() => {
@@ -199,6 +205,23 @@ export default function App() {
     return [];
   });
 
+  const [savingsEntries, setSavingsEntries] = useState<SavingsEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem(userSavingsEntriesKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse savings entries:', e);
+    }
+    return [];
+  });
+
+  // Streak is fully derived from entries — compute synchronously so the UI
+  // never shows a stale streak after an add/edit/delete.
+  const savingsStreak = useMemo<SavingsStreakState>(
+    () => deriveStreakState(savingsEntries),
+    [savingsEntries]
+  );
+
   const [settings, setSettings] = useState<NotificationSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
@@ -242,6 +265,8 @@ export default function App() {
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [isBillTemplateModalOpen, setIsBillTemplateModalOpen] = useState(false);
   const [editingBillTemplate, setEditingBillTemplate] = useState<BillTemplate | null>(null);
+  const [isSavingsModalOpen, setIsSavingsModalOpen] = useState(false);
+  const [editingSavingsEntry, setEditingSavingsEntry] = useState<SavingsEntry | null>(null);
   const [recentlyDeletedTransaction, setRecentlyDeletedTransaction] = useState<{
     tx: FinanceTransaction;
     index: number;
@@ -365,6 +390,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(userBillPaymentsKey, JSON.stringify(billPayments));
   }, [billPayments, userBillPaymentsKey]);
+
+  useEffect(() => {
+    localStorage.setItem(userSavingsEntriesKey, JSON.stringify(savingsEntries));
+  }, [savingsEntries, userSavingsEntriesKey]);
+
+  useEffect(() => {
+    localStorage.setItem(userSavingsStreakKey, JSON.stringify(savingsStreak));
+  }, [savingsStreak, userSavingsStreakKey]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
@@ -611,6 +644,7 @@ export default function App() {
     setFinanceAlerts([]);
     setBillTemplates([]);
     setBillPayments([]);
+    setSavingsEntries([]);
     setIsSettingsOpen(false);
   };
 
@@ -628,6 +662,8 @@ export default function App() {
         savingsGoals,
         billTemplates,
         billPayments,
+        savingsEntries,
+        savingsStreak,
         user: currentUser,
       }, null, 2)],
       { type: 'application/json' }
@@ -658,6 +694,7 @@ export default function App() {
         if (parsed.savingsGoals) setSavingsGoals(parsed.savingsGoals);
         if (parsed.billTemplates) setBillTemplates(parsed.billTemplates);
         if (parsed.billPayments) setBillPayments(parsed.billPayments);
+        if (parsed.savingsEntries) setSavingsEntries(parsed.savingsEntries);
         alert('Data successfully imported!');
       } catch (err) {
         alert('Invalid JSON file format.');
@@ -1036,6 +1073,61 @@ export default function App() {
   const openBillTemplateModal = (template?: BillTemplate | null) => {
     setEditingBillTemplate(template || null);
     setIsBillTemplateModalOpen(true);
+  };
+
+  // ===== Savings handlers =====
+  const openSavingsModal = (entry?: SavingsEntry | null) => {
+    setEditingSavingsEntry(entry || null);
+    setIsSavingsModalOpen(true);
+  };
+
+  const handleSaveSavingsEntry = (partial: Partial<SavingsEntry>) => {
+    const now = new Date().toISOString();
+    if (partial.id) {
+      setSavingsEntries((prev) =>
+        prev.map((e) =>
+          e.id === partial.id
+            ? {
+                ...e,
+                date: partial.date ?? e.date,
+                amount: partial.amount ?? e.amount,
+                note: partial.note,
+                updatedAt: now,
+              }
+            : e
+        )
+      );
+    } else {
+      const newEntry: SavingsEntry = {
+        id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        userId: currentUser?.id,
+        date: partial.date || new Date().toISOString().split('T')[0],
+        amount: partial.amount || 0,
+        note: partial.note,
+        createdAt: now,
+        updatedAt: now,
+      };
+      setSavingsEntries((prev) => [newEntry, ...prev]);
+    }
+  };
+
+  const handleDeleteSavingsEntry = (id: string) => {
+    setSavingsEntries((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  const handleQuickAddSavings = (amount: number) => {
+    const today = new Date().toISOString().split('T')[0];
+    const now = new Date().toISOString();
+    const newEntry: SavingsEntry = {
+      id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      userId: currentUser?.id,
+      date: today,
+      amount,
+      note: 'Quick add',
+      createdAt: now,
+      updatedAt: now,
+    };
+    setSavingsEntries((prev) => [newEntry, ...prev]);
   };
 
   // Budget alert effect: check thresholds when transactions/budgets change.
@@ -1482,6 +1574,12 @@ export default function App() {
             onDeleteBillTemplate={handleDeleteBillTemplate}
             onToggleBillPaid={handleToggleBillPaid}
             onUpdateBillPaymentAmount={handleUpdateBillPaymentAmount}
+            savingsEntries={savingsEntries}
+            savingsStreak={savingsStreak}
+            onAddSavings={() => openSavingsModal(null)}
+            onEditSavings={(entry) => openSavingsModal(entry)}
+            onDeleteSavings={handleDeleteSavingsEntry}
+            onQuickAddSavings={handleQuickAddSavings}
             onDismissAlert={handleDismissAlert}
           />
         )}
@@ -1547,6 +1645,18 @@ export default function App() {
         }}
         onSave={handleSaveBillTemplate}
         initialTemplate={editingBillTemplate}
+      />
+
+      {/* Add / Edit Savings Entry Modal */}
+      <SavingsModal
+        isOpen={isSavingsModalOpen}
+        onClose={() => {
+          setIsSavingsModalOpen(false);
+          setEditingSavingsEntry(null);
+        }}
+        onSave={handleSaveSavingsEntry}
+        initialEntry={editingSavingsEntry}
+        selectedDate={selectedDate}
       />
 
       {/* Settings Modal */}

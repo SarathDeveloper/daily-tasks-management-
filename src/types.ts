@@ -141,6 +141,22 @@ export interface SavingsGoal {
   target: number;
 }
 
+export interface SavingsEntry {
+  id: string;
+  userId?: string;
+  date: string; // YYYY-MM-DD
+  amount: number; // how much saved that day
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SavingsStreakState {
+  currentStreak: number;
+  longestStreak: number;
+  lastSavedDate?: string; // YYYY-MM-DD
+}
+
 export interface BillTemplate {
   id: string;
   userId?: string;

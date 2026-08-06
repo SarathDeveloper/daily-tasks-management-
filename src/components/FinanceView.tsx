@@ -31,7 +31,9 @@ import {
   FinanceTransaction,
   MonthlyBudget,
   PaymentMethod,
+  SavingsEntry,
   SavingsGoal,
+  SavingsStreakState,
 } from '../types';
 import {
   EXPENSE_CATEGORIES,
@@ -47,6 +49,13 @@ import {
   getPrev7DaysTotals,
   getSavingsProgress,
 } from '../lib/financeInsights';
+import {
+  calculateStreak,
+  getLastNDaysHeatmap,
+  getMonthlySavingsTotal,
+  getMonthlySavedDays,
+  heatmapIntensity,
+} from '../lib/savingsStreak';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Dropdown } from './ui/Dropdown';
@@ -60,6 +69,8 @@ interface FinanceViewProps {
   savingsGoals: SavingsGoal[];
   billTemplates: BillTemplate[];
   billPayments: BillPayment[];
+  savingsEntries: SavingsEntry[];
+  savingsStreak: SavingsStreakState;
   financeAlerts: BudgetAlert[];
   selectedDate: string;
   onSelectDate: (date: string) => void;
@@ -80,10 +91,14 @@ interface FinanceViewProps {
   onDeleteBillTemplate: (id: string) => void;
   onToggleBillPaid: (payment: BillPayment) => void;
   onUpdateBillPaymentAmount: (payment: BillPayment, amount: number) => void;
+  onAddSavings: () => void;
+  onEditSavings: (entry: SavingsEntry) => void;
+  onDeleteSavings: (id: string) => void;
+  onQuickAddSavings: (amount: number) => void;
   onDismissAlert: (key: string) => void;
 }
 
-type FinanceMode = 'daily' | 'weekly' | 'monthly' | 'bills' | 'debts';
+type FinanceMode = 'daily' | 'weekly' | 'monthly' | 'bills' | 'debts' | 'savings';
 type FilterType = 'all' | 'expense' | 'income';
 type FilterPayment = 'all' | PaymentMethod;
 type DebtFilter = 'all' | 'outstanding' | 'settled';
@@ -131,6 +146,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   savingsGoals,
   billTemplates,
   billPayments,
+  savingsEntries,
+  savingsStreak,
   financeAlerts,
   selectedDate,
   onSelectDate,
@@ -151,6 +168,10 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   onDeleteBillTemplate,
   onToggleBillPaid,
   onUpdateBillPaymentAmount,
+  onAddSavings,
+  onEditSavings,
+  onDeleteSavings,
+  onQuickAddSavings,
   onDismissAlert,
 }) => {
   const [mode, setMode] = useState<FinanceMode>('daily');
@@ -397,6 +418,41 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     setPaymentAmountInput('');
   };
 
+  // Savings
+  const currentSavingsMonth = toMonthKey(selectedDate);
+  const savingsHeatmap = useMemo(
+    () => getLastNDaysHeatmap(savingsEntries, 30),
+    [savingsEntries]
+  );
+  const heatmapMax = useMemo(
+    () => savingsHeatmap.reduce((m, d) => Math.max(m, d.amount), 0),
+    [savingsHeatmap]
+  );
+  const monthSavingsTotal = useMemo(
+    () => getMonthlySavingsTotal(savingsEntries, currentSavingsMonth),
+    [savingsEntries, currentSavingsMonth]
+  );
+  const monthSavedDays = useMemo(
+    () => getMonthlySavedDays(savingsEntries, currentSavingsMonth),
+    [savingsEntries, currentSavingsMonth]
+  );
+  const monthSavingsList = useMemo(
+    () =>
+      savingsEntries
+        .filter((e) => e.date.startsWith(currentSavingsMonth))
+        .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)),
+    [savingsEntries, currentSavingsMonth]
+  );
+  const daysInMonth = new Date(
+    parseInt(currentSavingsMonth.slice(0, 4)),
+    parseInt(currentSavingsMonth.slice(5, 7)),
+    0
+  ).getDate();
+  const savedToday = savingsEntries.some((e) => e.date === todayStr && e.amount > 0);
+  const currentStreak = savingsStreak.currentStreak;
+  const longestStreak = savingsStreak.longestStreak;
+  const SAVINGS_QUICK_AMOUNTS = [50, 100, 200, 500];
+
   return (
     <div className="max-w-4xl lg:max-w-6xl mx-auto space-y-5 pb-20 lg:pb-8">
       {/* Header */}
@@ -492,9 +548,22 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               Debts
             </span>
           </button>
+          <button
+            onClick={() => setMode('savings')}
+            className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
+              mode === 'savings'
+                ? 'bg-white dark:bg-slate-700 text-emerald-700 dark:text-emerald-300 shadow-sm'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <PiggyBank className="w-3.5 h-3.5" />
+              Savings
+            </span>
+          </button>
         </div>
 
-        {mode !== 'debts' && mode !== 'bills' && (
+        {mode !== 'debts' && mode !== 'bills' && mode !== 'savings' && (
           <button
             onClick={() => setShowFilters((s) => !s)}
             className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
@@ -1653,6 +1722,226 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                 </div>
               )}
             </>
+          )}
+        </>
+      )}
+
+      {/* ============ SAVINGS VIEW ============ */}
+      {mode === 'savings' && (
+        <>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <PiggyBank className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Savings Habit</span>
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Log a small saving each day to build a streak. Consistency beats amount.
+              </p>
+            </div>
+            <Button variant="primary" size="sm" onClick={onAddSavings}>
+              <Plus className="w-4 h-4" />
+              Log Savings
+            </Button>
+          </div>
+
+          {/* Streak card */}
+          <Card className="p-4 bg-gradient-to-br from-emerald-50 to-indigo-50 dark:from-emerald-950/30 dark:to-indigo-950/30 border-emerald-200/60 dark:border-emerald-900/40">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="text-4xl">{currentStreak > 0 ? '🔥' : '🌱'}</div>
+                <div>
+                  <p className="text-2xl font-black text-slate-900 dark:text-white leading-none">
+                    {currentStreak} {currentStreak === 1 ? 'day' : 'days'}
+                  </p>
+                  <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 mt-1">
+                    Current streak
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-500 dark:text-slate-400">Longest</p>
+                <p className="text-lg font-bold text-slate-900 dark:text-white">{longestStreak} days</p>
+                {savingsStreak.lastSavedDate && (
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    Last saved {new Date(savingsStreak.lastSavedDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-emerald-200/60 dark:border-emerald-900/40">
+              {savedToday ? (
+                <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                  <Check className="w-3.5 h-3.5" />
+                  You saved today — streak is safe!
+                </p>
+              ) : (
+                <p className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Log a saving today to keep your streak alive.
+                </p>
+              )}
+            </div>
+          </Card>
+
+          {/* Quick-add chips */}
+          <div>
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
+              Quick add today's saving:
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {SAVINGS_QUICK_AMOUNTS.map((amt) => (
+                <button
+                  key={amt}
+                  onClick={() => onQuickAddSavings(amt)}
+                  className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-700 dark:text-slate-300 hover:border-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors"
+                >
+                  +₹ {amt}
+                </button>
+              ))}
+              <button
+                onClick={onAddSavings}
+                className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                Custom...
+              </button>
+            </div>
+          </div>
+
+          {/* 30-day heatmap */}
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                Last 30 days
+              </h4>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                {savingsHeatmap.filter((d) => d.saved).length} / 30 days saved
+              </span>
+            </div>
+            <div className="grid grid-cols-10 sm:grid-cols-15 gap-1">
+              {savingsHeatmap.map((d) => {
+                const intensity = heatmapIntensity(d.amount, heatmapMax);
+                const bg = d.saved
+                  ? intensity >= 4
+                    ? 'bg-emerald-600'
+                    : intensity === 3
+                    ? 'bg-emerald-500'
+                    : intensity === 2
+                    ? 'bg-emerald-400'
+                    : 'bg-emerald-300'
+                  : 'bg-slate-100 dark:bg-slate-800';
+                return (
+                  <div
+                    key={d.date}
+                    title={`${d.date}: ${d.saved ? formatMoney(d.amount) : 'No saving'}`}
+                    className={`aspect-square rounded ${bg} ${d.date === todayStr ? 'ring-2 ring-indigo-400' : ''}`}
+                  />
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-2">
+              Today's square is highlighted with a ring.
+            </p>
+          </Card>
+
+          {/* Month KPIs */}
+          <div className="grid grid-cols-3 gap-3">
+            <Card className="p-3 sm:p-4">
+              <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                Saved this month
+              </div>
+              <p className="text-base sm:text-xl font-black text-emerald-700 dark:text-emerald-400 truncate">
+                {formatMoney(monthSavingsTotal)}
+              </p>
+            </Card>
+            <Card className="p-3 sm:p-4">
+              <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                Days saved
+              </div>
+              <p className="text-base sm:text-xl font-black text-slate-900 dark:text-white truncate">
+                {monthSavedDays} / {daysInMonth}
+              </p>
+            </Card>
+            <Card className="p-3 sm:p-4">
+              <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                Daily avg
+              </div>
+              <p className="text-base sm:text-xl font-black text-slate-900 dark:text-white truncate">
+                {formatMoney(monthSavedDays > 0 ? monthSavingsTotal / monthSavedDays : 0)}
+              </p>
+            </Card>
+          </div>
+
+          {/* Month navigator */}
+          <Card className="p-3 flex items-center justify-between gap-2">
+            <button
+              onClick={() => setSelectedMonth(shiftMonth(currentSavingsMonth, -1))}
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <div className="text-center flex-1">
+              <p className="font-bold text-sm text-slate-900 dark:text-white">
+                {monthLabel(currentSavingsMonth)}
+              </p>
+            </div>
+            <button
+              onClick={() => setSelectedMonth(shiftMonth(currentSavingsMonth, 1))}
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </Card>
+
+          {/* Savings entries list for selected month */}
+          {monthSavingsList.length > 0 ? (
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 px-1">
+                Savings in {monthLabel(currentSavingsMonth)}
+              </h4>
+              {monthSavingsList.map((entry) => (
+                <Card key={entry.id} className="p-3 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                    <PiggyBank className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-slate-900 dark:text-white">
+                      {formatMoney(entry.amount)}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                      {new Date(entry.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      {entry.note && <span> · {entry.note}</span>}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      onClick={() => onEditSavings(entry)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      title="Edit"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => onDeleteSavings(entry.id)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-10 px-4 bg-white/80 dark:bg-slate-900/50 border border-dashed border-slate-300 dark:border-slate-800 rounded-2xl">
+              <PiggyBank className="w-12 h-12 text-slate-400 dark:text-slate-600 mx-auto mb-3" />
+              <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">
+                No savings logged for {monthLabel(currentSavingsMonth)}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-500 mt-1 max-w-xs mx-auto">
+                Start a habit today — even ₹50 counts and keeps your streak alive.
+              </p>
+            </div>
           )}
         </>
       )}
