@@ -1,0 +1,6 @@
+{
+  "name": "Daily Tasks Management",
+  "description": "Mobile-friendly daily task management web app with recurring reminders, browser notifications, sound alerts, time-blocking planner, and focus timer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
