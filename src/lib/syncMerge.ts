@@ -128,6 +128,13 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope | null)
       remote.data.savingsEntries,
       tombstones
     ),
+    goals: mergeCollection(local.data.goals ?? [], remote.data.goals ?? [], tombstones),
+    habits: mergeCollection(local.data.habits ?? [], remote.data.habits ?? [], tombstones),
+    habitCheckIns: mergeCollection(
+      local.data.habitCheckIns ?? [],
+      remote.data.habitCheckIns ?? [],
+      tombstones
+    ),
     billTemplates: mergeCollection(local.data.billTemplates, remote.data.billTemplates, tombstones),
     billPayments: mergeCollection(local.data.billPayments, remote.data.billPayments, tombstones),
     settings: mergeSettings(
@@ -169,6 +176,9 @@ export function isEnvelopeEmpty(envelope: SyncEnvelope | null): boolean {
       data.debts.length === 0 &&
       data.savingsGoals.length === 0 &&
       data.savingsEntries.length === 0 &&
+      (data.goals?.length ?? 0) === 0 &&
+      (data.habits?.length ?? 0) === 0 &&
+      (data.habitCheckIns?.length ?? 0) === 0 &&
       data.billTemplates.length === 0 &&
       data.billPayments.length === 0)
   );
@@ -193,8 +203,11 @@ export function isValidEnvelope(value: unknown): value is SyncEnvelope {
     'billPayments',
   ];
   if (!arrays.every((key) => Array.isArray(data[key]))) return false;
-  // Accounts/settings were added in schema v2; older backups simply omit them.
+  // Accounts were added in schema v2, goals and habits later. Older backups omit them.
   if (data.accounts !== undefined && !Array.isArray(data.accounts)) return false;
   if (data.ledgerSettings !== undefined && !Array.isArray(data.ledgerSettings)) return false;
+  if (data.goals !== undefined && !Array.isArray(data.goals)) return false;
+  if (data.habits !== undefined && !Array.isArray(data.habits)) return false;
+  if (data.habitCheckIns !== undefined && !Array.isArray(data.habitCheckIns)) return false;
   return true;
 }

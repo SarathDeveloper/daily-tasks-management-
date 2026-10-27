@@ -75,7 +75,50 @@ export interface NotificationSettings {
   };
 }
 
-export type ActiveTab = 'today' | 'timeline' | 'focus' | 'categories' | 'stats' | 'finance' | 'settings';
+export type ActiveTab = 'today' | 'timeline' | 'focus' | 'goals' | 'habits' | 'categories' | 'stats' | 'finance' | 'settings';
+
+export type GoalStatus = 'active' | 'paused' | 'completed';
+
+export interface Goal {
+  id: string;
+  userId?: string;
+  title: string;
+  note?: string;
+  startDate: string; // YYYY-MM-DD
+  targetDate: string; // YYYY-MM-DD
+  status: GoalStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type HabitScheduleType = 'daily' | 'weekdays' | 'custom';
+
+export interface HabitSchedule {
+  type: HabitScheduleType;
+  /** 0 = Sunday … 6 = Saturday. Used when type is `custom`. */
+  daysOfWeek?: number[];
+}
+
+export interface Habit {
+  id: string;
+  userId?: string;
+  title: string;
+  goalId?: string;
+  schedule: HabitSchedule;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One record per habit per calendar day. Deleting it unchecks that day. */
+export interface HabitCheckIn {
+  id: string;
+  userId?: string;
+  habitId: string;
+  date: string; // YYYY-MM-DD
+  createdAt: string;
+  updatedAt: string;
+}
 
 // ---------------------------------------------------------------------------
 // Money ledger: accounts

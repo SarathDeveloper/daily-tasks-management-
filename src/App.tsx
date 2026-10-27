@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -23,6 +23,8 @@ import { TransferModal } from './components/ledger/TransferModal';
 import { DebtModal } from './components/DebtModal';
 import { BillTemplateModal } from './components/BillTemplateModal';
 import { SavingsModal } from './components/SavingsModal';
+import { HabitsView } from './components/HabitsView';
+import { GoalsView } from './components/GoalsView';
 import { materializeRecurringTransactions } from './lib/financeRecurrence';
 import { materializeBillPayments } from './lib/billMaterializer';
 import { deriveStreakState } from './lib/savingsStreak';
@@ -146,6 +148,9 @@ export default function App() {
   const userBillPaymentsKey = storageKeys.billPayments;
   const userSavingsEntriesKey = storageKeys.savingsEntries;
   const userSavingsStreakKey = storageKeys.savingsStreak;
+  const userGoalsKey = storageKeys.goals;
+  const userHabitsKey = storageKeys.habits;
+  const userHabitCheckInsKey = storageKeys.habitCheckIns;
   const STORAGE_KEY_SETTINGS = storageKeys.settings;
 
   // 1. Core State
@@ -277,6 +282,36 @@ export default function App() {
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse savings entries:', e);
+    }
+    return [];
+  });
+
+  const [goals, setGoals] = useState<Goal[]>(() => {
+    try {
+      const saved = localStorage.getItem(userGoalsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse goals:', e);
+    }
+    return [];
+  });
+
+  const [habits, setHabits] = useState<Habit[]>(() => {
+    try {
+      const saved = localStorage.getItem(userHabitsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse habits:', e);
+    }
+    return [];
+  });
+
+  const [habitCheckIns, setHabitCheckIns] = useState<HabitCheckIn[]>(() => {
+    try {
+      const saved = localStorage.getItem(userHabitCheckInsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse habit check-ins:', e);
     }
     return [];
   });
@@ -429,6 +464,15 @@ export default function App() {
       );
       setBillPayments(materializedPayments);
 
+      const savedGoals = localStorage.getItem(userGoalsKey);
+      setGoals(savedGoals ? JSON.parse(savedGoals) : []);
+
+      const savedHabits = localStorage.getItem(userHabitsKey);
+      setHabits(savedHabits ? JSON.parse(savedHabits) : []);
+
+      const savedHabitCheckIns = localStorage.getItem(userHabitCheckInsKey);
+      setHabitCheckIns(savedHabitCheckIns ? JSON.parse(savedHabitCheckIns) : []);
+
       const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
       setSettings(
         savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS
@@ -436,7 +480,7 @@ export default function App() {
     } catch (e) {
       console.warn('Error loading user data:', e);
     }
-  }, [currentUser?.id, dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, STORAGE_KEY_SETTINGS]);
+  }, [currentUser?.id, dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   useEffect(() => {
@@ -492,6 +536,18 @@ export default function App() {
   }, [savingsEntries, userSavingsEntriesKey]);
 
   useEffect(() => {
+    localStorage.setItem(userGoalsKey, JSON.stringify(goals));
+  }, [goals, userGoalsKey]);
+
+  useEffect(() => {
+    localStorage.setItem(userHabitsKey, JSON.stringify(habits));
+  }, [habits, userHabitsKey]);
+
+  useEffect(() => {
+    localStorage.setItem(userHabitCheckInsKey, JSON.stringify(habitCheckIns));
+  }, [habitCheckIns, userHabitCheckInsKey]);
+
+  useEffect(() => {
     localStorage.setItem(userSavingsStreakKey, JSON.stringify(savingsStreak));
   }, [savingsStreak, userSavingsStreakKey]);
 
@@ -527,6 +583,9 @@ export default function App() {
     savingsEntries,
     billTemplates,
     billPayments,
+    goals,
+    habits,
+    habitCheckIns,
   ]);
 
   // Google Drive backup
@@ -719,12 +778,33 @@ export default function App() {
     void requestPersistentStorage();
   }, []);
 
+  const closeHabitModalRef = useRef<(() => void) | null>(null);
+  const closeGoalModalRef = useRef<(() => void) | null>(null);
+  const registerHabitClose = useCallback((close: (() => void) | null) => {
+    closeHabitModalRef.current = close;
+  }, []);
+  const registerGoalClose = useCallback((close: (() => void) | null) => {
+    closeGoalModalRef.current = close;
+  }, []);
+
   // Android hardware back: close whatever is open instead of killing the app.
   // The handler body is recreated every render and reached through a ref so the
   // native listener is registered exactly once (re-registering on every modal
   // change leaked listeners and made one back press fire several handlers).
   const backHandlerRef = useRef<() => void>(() => {});
   backHandlerRef.current = () => {
+    if (closeHabitModalRef.current) {
+      const close = closeHabitModalRef.current;
+      closeHabitModalRef.current = null;
+      close();
+      return;
+    }
+    if (closeGoalModalRef.current) {
+      const close = closeGoalModalRef.current;
+      closeGoalModalRef.current = null;
+      close();
+      return;
+    }
     if (isTaskModalOpen) {
       setIsTaskModalOpen(false);
       setEditingTask(null);
@@ -971,6 +1051,9 @@ export default function App() {
       ...savingsEntries.map((e) => e.id),
       ...billTemplates.map((b) => b.id),
       ...billPayments.map((p) => p.id),
+      ...goals.map((g) => g.id),
+      ...habits.map((h) => h.id),
+      ...habitCheckIns.map((c) => c.id),
     ]);
     if (isNativeAndroid()) void cancelAllTaskReminders();
     const freshTasks = getInitialTasks().map((t) => ({ ...t, userId: currentUser?.id }));
@@ -993,6 +1076,9 @@ export default function App() {
     setBillTemplates([]);
     setBillPayments([]);
     setSavingsEntries([]);
+    setGoals([]);
+    setHabits([]);
+    setHabitCheckIns([]);
     setIsSettingsOpen(false);
   };
 
@@ -1014,6 +1100,9 @@ export default function App() {
         billPayments,
         savingsEntries,
         savingsStreak,
+        goals,
+        habits,
+        habitCheckIns,
         user: currentUser,
       }, null, 2)],
       { type: 'application/json' }
@@ -1057,6 +1146,9 @@ export default function App() {
           ...idOf(savingsEntries),
           ...idOf(billTemplates),
           ...idOf(billPayments),
+          ...idOf(goals),
+          ...idOf(habits),
+          ...idOf(habitCheckIns),
         ];
         const importedIds = [
           ...idOf(parsed.tasks),
@@ -1071,6 +1163,9 @@ export default function App() {
           ...idOf(parsed.savingsEntries),
           ...idOf(parsed.billTemplates),
           ...idOf(parsed.billPayments),
+          ...idOf(parsed.goals),
+          ...idOf(parsed.habits),
+          ...idOf(parsed.habitCheckIns),
         ];
         const importedSet = new Set(importedIds);
         markDeleted(
@@ -1092,12 +1187,139 @@ export default function App() {
         if (parsed.billTemplates) setBillTemplates(parsed.billTemplates);
         if (parsed.billPayments) setBillPayments(parsed.billPayments);
         if (parsed.savingsEntries) setSavingsEntries(parsed.savingsEntries);
+        if (parsed.goals) setGoals(parsed.goals);
+        if (parsed.habits) setHabits(parsed.habits);
+        if (parsed.habitCheckIns) setHabitCheckIns(parsed.habitCheckIns);
         alert('Data successfully imported!');
       } catch (err) {
         alert('Invalid JSON file format.');
       }
     };
     reader.readAsText(file);
+  };
+
+  // Goals and habits
+  const handleSaveGoal = (partial: Partial<Goal>) => {
+    const now = new Date().toISOString();
+    if (partial.id) {
+      setGoals((prev) =>
+        prev.map((goal) =>
+          goal.id === partial.id
+            ? {
+                ...goal,
+                title: partial.title?.trim() || goal.title,
+                note: partial.note?.trim() || undefined,
+                startDate: partial.startDate || goal.startDate,
+                targetDate: partial.targetDate || goal.targetDate,
+                status: partial.status || goal.status,
+                updatedAt: now,
+              }
+            : goal
+        )
+      );
+      return;
+    }
+
+    const created: Goal = {
+      id: newLedgerId('goal'),
+      userId: currentUser?.id,
+      title: partial.title?.trim() || 'New goal',
+      note: partial.note?.trim() || undefined,
+      startDate: partial.startDate || todayStr,
+      targetDate: partial.targetDate || todayStr,
+      status: partial.status || 'active',
+      createdAt: now,
+      updatedAt: now,
+    };
+    setGoals((prev) => [created, ...prev]);
+  };
+
+  const handleDeleteGoal = (id: string) => {
+    markDeleted(storageKeys, [id]);
+    const now = new Date().toISOString();
+    setGoals((prev) => prev.filter((goal) => goal.id !== id));
+    setHabits((prev) =>
+      prev.map((habit) =>
+        habit.goalId === id ? { ...habit, goalId: undefined, updatedAt: now } : habit
+      )
+    );
+  };
+
+  const handleSaveHabit = (partial: Partial<Habit>) => {
+    const now = new Date().toISOString();
+    if (partial.id) {
+      setHabits((prev) =>
+        prev.map((habit) =>
+          habit.id === partial.id
+            ? {
+                ...habit,
+                title: partial.title?.trim() || habit.title,
+                goalId: partial.goalId || undefined,
+                schedule: partial.schedule || habit.schedule,
+                archived: partial.archived ?? habit.archived,
+                updatedAt: now,
+              }
+            : habit
+        )
+      );
+      return;
+    }
+
+    const created: Habit = {
+      id: newLedgerId('habit'),
+      userId: currentUser?.id,
+      title: partial.title?.trim() || 'New habit',
+      goalId: partial.goalId || undefined,
+      schedule: partial.schedule || { type: 'daily' },
+      archived: partial.archived ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setHabits((prev) => [created, ...prev]);
+  };
+
+  const handleDeleteHabit = (id: string) => {
+    const removedChecks = habitCheckIns.filter((entry) => entry.habitId === id).map((entry) => entry.id);
+    markDeleted(storageKeys, [id, ...removedChecks]);
+    setHabits((prev) => prev.filter((habit) => habit.id !== id));
+    setHabitCheckIns((prev) => prev.filter((entry) => entry.habitId !== id));
+  };
+
+  const handleToggleCheckIn = (habitId: string, date: string) => {
+    const now = new Date().toISOString();
+    const id = `checkin-${habitId}-${date}`;
+    setHabitCheckIns((prev) => {
+      const existing = prev.filter((entry) => entry.habitId === habitId && entry.date === date);
+      if (existing.length > 0) {
+        markDeleted(
+          storageKeys,
+          existing.map((entry) => entry.id)
+        );
+        const ids = new Set(existing.map((entry) => entry.id));
+        return prev.filter((entry) => !ids.has(entry.id));
+      }
+      unmarkDeleted(storageKeys, [id]);
+      return [
+        ...prev,
+        {
+          id,
+          userId: currentUser?.id,
+          habitId,
+          date,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+    });
+  };
+
+  const handleLinkHabit = (habitId: string, goalId?: string) => {
+    const now = new Date().toISOString();
+    setHabits((prev) =>
+      prev.map((habit) =>
+        habit.id === habitId ? { ...habit, goalId: goalId || undefined, updatedAt: now } : habit
+      )
+    );
   };
 
   // Finance handlers
@@ -2138,6 +2360,32 @@ export default function App() {
             tasks={tasks}
             initialActiveTask={focusTask}
             onCompleteTask={handleToggleComplete}
+          />
+        )}
+
+        {activeTab === 'goals' && (
+          <GoalsView
+            goals={goals}
+            habits={habits}
+            checkIns={habitCheckIns}
+            onSaveGoal={handleSaveGoal}
+            onDeleteGoal={handleDeleteGoal}
+            onSaveHabit={handleSaveHabit}
+            onLinkHabit={handleLinkHabit}
+            onRegisterClose={registerGoalClose}
+          />
+        )}
+
+        {activeTab === 'habits' && (
+          <HabitsView
+            goals={goals}
+            habits={habits}
+            checkIns={habitCheckIns}
+            onToggleCheckIn={handleToggleCheckIn}
+            onSaveHabit={handleSaveHabit}
+            onDeleteHabit={handleDeleteHabit}
+            onOpenGoals={() => setActiveTab('goals')}
+            onRegisterClose={registerHabitClose}
           />
         )}
 

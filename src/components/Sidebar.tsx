@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Clock, Zap, Folder, TrendingUp, Wallet, Plus } from 'lucide-react';
+import { Calendar, Clock, Zap, Folder, TrendingUp, Wallet, Plus, Target, Repeat } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface SidebarProps {
@@ -17,6 +17,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'today', label: 'Today', icon: Calendar },
     { id: 'timeline', label: 'Timeline', icon: Clock },
     { id: 'focus', label: 'Focus', icon: Zap },
+    { id: 'goals', label: 'Goals', icon: Target },
+    { id: 'habits', label: 'Habits', icon: Repeat },
     { id: 'categories', label: 'Categories', icon: Folder },
     { id: 'finance', label: 'Finance', icon: Wallet },
     { id: 'stats', label: 'Stats', icon: TrendingUp },

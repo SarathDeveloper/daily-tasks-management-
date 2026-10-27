@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Clock, Zap, Folder, Wallet, TrendingUp, Plus } from 'lucide-react';
+import { Calendar, Clock, Zap, Folder, Wallet, TrendingUp, Plus, Repeat } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface BottomNavProps {
@@ -17,6 +17,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     { id: 'today', label: 'Today', icon: Calendar },
     { id: 'timeline', label: 'Time', icon: Clock },
     { id: 'focus', label: 'Focus', icon: Zap },
+    { id: 'habits', label: 'Habits', icon: Repeat },
     { id: 'categories', label: 'Lists', icon: Folder },
     { id: 'finance', label: 'Money', icon: Wallet },
     { id: 'stats', label: 'Stats', icon: TrendingUp },
@@ -35,7 +36,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
 
       {/* Fixed Bottom Navigation Bar */}
       <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 px-1 py-1 pb-[calc(0.35rem+env(safe-area-inset-bottom,0px))] transition-colors select-none lg:hidden">
-        <div className="max-w-lg mx-auto grid grid-cols-6">
+        <div className="max-w-lg mx-auto grid grid-cols-7">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -50,8 +51,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-medium'
                 }`}
               >
-                <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
-                <span className="text-[10px] mt-0.5 tracking-tight leading-none">{tab.label}</span>
+                <Icon className={`w-4 h-4 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
+                <span className="text-[9px] mt-0.5 tracking-tight leading-none">{tab.label}</span>
               </button>
             );
           })}

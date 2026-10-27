@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Account, FinanceTransaction, LedgerSettings } from '../types';
+import type { Account, FinanceTransaction, Goal, Habit, HabitCheckIn, LedgerSettings } from '../types';
 import {
   DATA_SCHEMA_VERSION,
   DEFAULT_SETTINGS,
@@ -246,5 +246,89 @@ describe('sync envelopes', () => {
   it('treats an accounts-only envelope as non-empty', () => {
     expect(isEnvelopeEmpty(envelope({ accounts: [account()] }))).toBe(false);
     expect(isEnvelopeEmpty(envelope({}))).toBe(true);
+  });
+
+  it('round-trips goals, habits, and check-ins', () => {
+    const keys = getStorageKeys('user-1');
+    const savedGoal: Goal = {
+      id: 'goal-1',
+      title: 'Read more',
+      startDate: '2026-10-01',
+      targetDate: '2026-12-01',
+      status: 'active',
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+    const savedHabit: Habit = {
+      id: 'habit-1',
+      title: 'Read 10 pages',
+      goalId: 'goal-1',
+      schedule: { type: 'daily' },
+      archived: false,
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+    const savedCheckIn: HabitCheckIn = {
+      id: 'checkin-habit-1-2026-10-02',
+      habitId: 'habit-1',
+      date: '2026-10-02',
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+
+    writeSnapshot(keys, {
+      ...emptyData(),
+      goals: [savedGoal],
+      habits: [savedHabit],
+      habitCheckIns: [savedCheckIn],
+    });
+
+    const loaded = readSnapshot(keys);
+    expect(loaded.goals).toEqual([savedGoal]);
+    expect(loaded.habits).toEqual([savedHabit]);
+    expect(loaded.habitCheckIns).toEqual([savedCheckIn]);
+    expect(countRecords(loaded)).toBe(3);
+  });
+
+  it('still validates a v2 envelope that has no goals or habits', () => {
+    expect(isValidEnvelope(envelope({}))).toBe(true);
+    expect(isValidEnvelope(envelope({ goals: 'nope' as unknown as Goal[] }))).toBe(false);
+  });
+
+  it('merges a backup that omits goals without dropping local habits', () => {
+    const local = envelope({
+      goals: [
+        {
+          id: 'goal-1',
+          title: 'Read more',
+          startDate: '2026-10-01',
+          targetDate: '2026-12-01',
+          status: 'active',
+          createdAt: STAMP,
+          updatedAt: STAMP,
+        },
+      ],
+      habits: [
+        {
+          id: 'habit-1',
+          title: 'Read',
+          schedule: { type: 'daily' },
+          archived: false,
+          createdAt: STAMP,
+          updatedAt: STAMP,
+        },
+      ],
+    });
+    const remote = envelope({}, { schemaVersion: 2, deviceId: 'device-b' });
+    const legacyData = { ...remote.data } as Partial<SyncData>;
+    delete legacyData.goals;
+    delete legacyData.habits;
+    delete legacyData.habitCheckIns;
+
+    const merged = mergeEnvelopes(local, { ...remote, data: legacyData as SyncData });
+    expect(merged.data.goals).toHaveLength(1);
+    expect(merged.data.habits).toHaveLength(1);
+    expect(merged.data.habitCheckIns).toEqual([]);
+    expect(isEnvelopeEmpty(envelope({ habits: local.data.habits }))).toBe(false);
   });
 });
