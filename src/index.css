@@ -12,14 +12,33 @@
 }
 
 html {
+  height: 100%;
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
   text-rendering: optimizeLegibility;
 }
 
 body {
+  min-height: 100%;
+  min-height: 100dvh;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+/* 16px keeps iOS from zooming the page when a field is focused. */
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 /* Hide scrollbars on horizontal scroll strips while keeping scroll behavior */

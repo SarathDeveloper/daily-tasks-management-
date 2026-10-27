@@ -1,6 +1,13 @@
 import { NotificationSettings, Task } from '../types';
 import { audioService } from './audioService';
+import { isQuietHours } from '../lib/reminders';
 
+/**
+ * Browser/PWA notification fallback.
+ *
+ * The native Android build uses `nativeNotificationService` instead; this class
+ * is what runs in a desktop browser and in the installed PWA.
+ */
 export class NotificationService {
   public static async requestPermission(): Promise<boolean> {
     if (!('Notification' in window)) {
@@ -23,67 +30,65 @@ export class NotificationService {
   }
 
   public static isQuietHours(settings: NotificationSettings): boolean {
-    if (!settings.quietHours.enabled) return false;
-    const now = new Date();
-    const currentMins = now.getHours() * 60 + now.getMinutes();
-
-    const [startH, startM] = settings.quietHours.start.split(':').map(Number);
-    const [endH, endM] = settings.quietHours.end.split(':').map(Number);
-
-    const startMins = startH * 60 + startM;
-    const endMins = endH * 60 + endM;
-
-    if (startMins < endMins) {
-      return currentMins >= startMins && currentMins < endMins;
-    } else {
-      // Overnight (e.g. 22:00 to 07:00)
-      return currentMins >= startMins || currentMins < endMins;
-    }
+    return isQuietHours(settings);
   }
 
-  public static sendTaskNotification(
+  public static async sendTaskNotification(
     task: Task,
     settings: NotificationSettings,
     onAlertTriggered?: (task: Task) => void
   ) {
-    const isQuiet = this.isQuietHours(settings);
+    const quiet = this.isQuietHours(settings);
 
-    // Play Sound if enabled and not quiet hours
-    if (settings.soundEnabled && !isQuiet && task.reminder.sound) {
+    // Play the in-app chime when audible (quiet hours silence it).
+    if (settings.soundEnabled && !quiet && task.reminder.sound) {
       audioService.playSound(task.reminder.sound, task.title);
     }
 
-    // Trigger Browser Notification if granted and enabled
     if (
       settings.browserNotificationsEnabled &&
-      !isQuiet &&
+      !quiet &&
       'Notification' in window &&
       Notification.permission === 'granted'
     ) {
-      try {
-        const title = `⏰ Reminder: ${task.title}`;
-        const body = task.time ? `Scheduled for ${task.time} (${task.category})` : task.category;
-        const notification = new Notification(title, {
-          body,
-          icon: '/favicon.ico',
-          tag: `task-${task.id}`,
-          requireInteraction: true,
-        });
+      const title = `Reminder: ${task.title}`;
+      const body = task.time ? `${task.time} · ${task.category}` : task.category;
+      const icon = `${import.meta.env.BASE_URL}icons/icon-192.png`;
 
-        notification.onclick = () => {
-          window.focus();
-          if (onAlertTriggered) onAlertTriggered(task);
-          notification.close();
-        };
+      try {
+        // Chrome on Android refuses `new Notification(...)`; the service worker
+        // registration is the only supported path there.
+        const registration =
+          'serviceWorker' in navigator
+            ? await navigator.serviceWorker.getRegistration()
+            : undefined;
+
+        if (registration) {
+          await registration.showNotification(title, {
+            body,
+            icon,
+            tag: `task-${task.id}`,
+            data: { taskId: task.id },
+          });
+        } else {
+          const notification = new Notification(title, {
+            body,
+            icon,
+            tag: `task-${task.id}`,
+          });
+          notification.onclick = () => {
+            window.focus();
+            onAlertTriggered?.(task);
+            notification.close();
+          };
+        }
       } catch (e) {
         console.warn('Native notification failed:', e);
       }
     }
 
-    // Trigger in-app alert banner
-    if (onAlertTriggered) {
-      onAlertTriggered(task);
-    }
+    // Always surface the in-app banner so the reminder is never missed.
+    onAlertTriggered?.(task);
   }
 }
 

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -18,6 +18,8 @@ import { CategoriesView } from './components/CategoriesView';
 import { StatsView } from './components/StatsView';
 import { FinanceView } from './components/FinanceView';
 import { FinanceModal } from './components/FinanceModal';
+import { AccountModal } from './components/ledger/AccountModal';
+import { TransferModal } from './components/ledger/TransferModal';
 import { DebtModal } from './components/DebtModal';
 import { BillTemplateModal } from './components/BillTemplateModal';
 import { SavingsModal } from './components/SavingsModal';
@@ -26,34 +28,63 @@ import { materializeBillPayments } from './lib/billMaterializer';
 import { deriveStreakState } from './lib/savingsStreak';
 import { checkBudgetAlerts, formatAlertMessage } from './lib/budgetAlerts';
 import { DEFAULT_PAYMENT_METHOD } from './data/financeCategories';
+import {
+  buildAtmFee,
+  buildIncomeOrExpense,
+  buildTransfer,
+  assignAccountToTransactions,
+  idsRemovedByCascade,
+  removeTransactionCascade,
+  resolveDefaultAccountId,
+  isLedgerError,
+  nowTimeString,
+  newLedgerId,
+  upsertTransactions,
+  validateEntry,
+  validateTransfer,
+  type EntryDraft,
+  type TransferDraft,
+} from './lib/ledger';
 import { NotificationBanner } from './components/NotificationBanner';
 import { SettingsModal } from './components/SettingsModal';
 import { BottomNav } from './components/BottomNav';
 import { Sidebar } from './components/Sidebar';
 import { AuthModal } from './components/AuthModal';
+import { InstallPrompt } from './components/InstallPrompt';
 import { Dropdown } from './components/ui/Dropdown';
 import { Toast } from './components/ui/Toast';
 import { Card } from './components/ui/Card';
 import { Button } from './components/ui/Button';
 import { getCurrentUser } from './services/authService';
+import { NotificationService, calculateNextDueDate } from './services/notificationService';
+import { App as CapApp } from '@capacitor/app';
+import { StatusBar, Style as StatusBarStyle } from '@capacitor/status-bar';
+import { SplashScreen } from '@capacitor/splash-screen';
 import {
-  NotificationService,
-  calculateNextDueDate,
-} from './services/notificationService';
+  cancelAllTaskReminders,
+  ensureNotificationSetup,
+  getNativePermissionStatus,
+  registerReminderListeners,
+  requestExactAlarmPermission,
+  syncScheduledNotifications,
+  type NotificationSetupResult,
+} from './services/nativeNotificationService';
+import { isNative, isNativeAndroid } from './lib/platform';
+import {
+  DEFAULT_SETTINGS,
+  getStorageKeys,
+  markDeleted,
+  readSyncMeta,
+  requestPersistentStorage,
+  unmarkDeleted,
+  writeSyncMeta,
+} from './lib/persistence';
+import { describeNextReminder } from './lib/reminders';
+import { useCloudSync } from './hooks/useCloudSync';
+import { CloudSyncSection } from './components/CloudSyncSection';
+import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
 
-const DEFAULT_STORAGE_KEY_TASKS = 'daily_tasks_app_data_v1';
-const DEFAULT_STORAGE_KEY_CATEGORIES = 'daily_tasks_categories_v1';
-const DEFAULT_STORAGE_KEY_FINANCE = 'daily_finance_transactions_v1';
-const DEFAULT_STORAGE_KEY_BUDGETS = 'daily_finance_budgets_v1';
-const DEFAULT_STORAGE_KEY_CAT_BUDGETS = 'daily_finance_category_budgets_v1';
-const DEFAULT_STORAGE_KEY_DEBTS = 'daily_finance_debts_v1';
-const DEFAULT_STORAGE_KEY_SAVINGS = 'daily_finance_savings_goals_v1';
-const DEFAULT_STORAGE_KEY_ALERT_STATE = 'daily_finance_alert_state_v1';
-const DEFAULT_STORAGE_KEY_BILL_TEMPLATES = 'daily_finance_bill_templates_v1';
-const DEFAULT_STORAGE_KEY_BILL_PAYMENTS = 'daily_finance_bill_payments_v1';
-const DEFAULT_STORAGE_KEY_SAVINGS_ENTRIES = 'daily_finance_savings_entries_v1';
-const DEFAULT_STORAGE_KEY_SAVINGS_STREAK = 'daily_finance_savings_streak_v1';
-const STORAGE_KEY_SETTINGS = 'daily_tasks_settings_v1';
+const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
 
 export default function App() {
   const todayStr = new Date().toISOString().split('T')[0];
@@ -82,25 +113,40 @@ export default function App() {
       document.documentElement.classList.add('light');
       document.documentElement.classList.remove('dark');
     }
+    document.documentElement.style.colorScheme = theme;
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'dark' ? '#0f172a' : '#ffffff');
+
+    // Match the Android status bar icons to the active theme.
+    if (isNative()) {
+      void StatusBar.setStyle({
+        style: theme === 'dark' ? StatusBarStyle.Dark : StatusBarStyle.Light,
+      }).catch(() => {});
+    }
   }, [theme]);
 
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Dynamic user-bound storage keys
-  const userTasksKey = currentUser ? `daily_tasks_user_${currentUser.id}` : DEFAULT_STORAGE_KEY_TASKS;
-  const userCategoriesKey = currentUser ? `daily_tasks_categories_${currentUser.id}` : DEFAULT_STORAGE_KEY_CATEGORIES;
-  const userFinanceKey = currentUser ? `daily_finance_user_${currentUser.id}` : DEFAULT_STORAGE_KEY_FINANCE;
-  const userBudgetsKey = currentUser ? `daily_finance_budgets_${currentUser.id}` : DEFAULT_STORAGE_KEY_BUDGETS;
-  const userCatBudgetsKey = currentUser ? `daily_finance_category_budgets_${currentUser.id}` : DEFAULT_STORAGE_KEY_CAT_BUDGETS;
-  const userDebtsKey = currentUser ? `daily_finance_debts_${currentUser.id}` : DEFAULT_STORAGE_KEY_DEBTS;
-  const userSavingsKey = currentUser ? `daily_finance_savings_goals_${currentUser.id}` : DEFAULT_STORAGE_KEY_SAVINGS;
-  const userAlertStateKey = currentUser ? `daily_finance_alert_state_${currentUser.id}` : DEFAULT_STORAGE_KEY_ALERT_STATE;
-  const userBillTemplatesKey = currentUser ? `daily_finance_bill_templates_${currentUser.id}` : DEFAULT_STORAGE_KEY_BILL_TEMPLATES;
-  const userBillPaymentsKey = currentUser ? `daily_finance_bill_payments_${currentUser.id}` : DEFAULT_STORAGE_KEY_BILL_PAYMENTS;
-  const userSavingsEntriesKey = currentUser ? `daily_finance_savings_entries_${currentUser.id}` : DEFAULT_STORAGE_KEY_SAVINGS_ENTRIES;
-  const userSavingsStreakKey = currentUser ? `daily_finance_savings_streak_${currentUser.id}` : DEFAULT_STORAGE_KEY_SAVINGS_STREAK;
+  // Dynamic user-bound storage keys (single source of truth: lib/persistence)
+  const storageKeys = useMemo(() => getStorageKeys(currentUser?.id), [currentUser?.id]);
+  const userTasksKey = storageKeys.tasks;
+  const userCategoriesKey = storageKeys.categories;
+  const userFinanceKey = storageKeys.transactions;
+  const userAccountsKey = storageKeys.accounts;
+  const userLedgerSettingsKey = storageKeys.ledgerSettings;
+  const userBudgetsKey = storageKeys.budgets;
+  const userCatBudgetsKey = storageKeys.categoryBudgets;
+  const userDebtsKey = storageKeys.debts;
+  const userSavingsKey = storageKeys.savingsGoals;
+  const userAlertStateKey = storageKeys.alertState;
+  const userBillTemplatesKey = storageKeys.billTemplates;
+  const userBillPaymentsKey = storageKeys.billPayments;
+  const userSavingsEntriesKey = storageKeys.savingsEntries;
+  const userSavingsStreakKey = storageKeys.savingsStreak;
+  const STORAGE_KEY_SETTINGS = storageKeys.settings;
 
   // 1. Core State
   const [tasks, setTasks] = useState<Task[]>(() => {
@@ -129,6 +175,26 @@ export default function App() {
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse finance transactions:', e);
+    }
+    return [];
+  });
+
+  const [accounts, setAccounts] = useState<Account[]>(() => {
+    try {
+      const saved = localStorage.getItem(userAccountsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse finance accounts:', e);
+    }
+    return [];
+  });
+
+  const [ledgerSettings, setLedgerSettings] = useState<LedgerSettings[]>(() => {
+    try {
+      const saved = localStorage.getItem(userLedgerSettingsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse ledger settings:', e);
     }
     return [];
   });
@@ -215,7 +281,7 @@ export default function App() {
     return [];
   });
 
-  // Streak is fully derived from entries — compute synchronously so the UI
+  // Streak is fully derived from entries � compute synchronously so the UI
   // never shows a stale streak after an add/edit/delete.
   const savingsStreak = useMemo<SavingsStreakState>(
     () => deriveStreakState(savingsEntries),
@@ -225,21 +291,11 @@ export default function App() {
   const [settings, setSettings] = useState<NotificationSettings>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
-      if (saved) return JSON.parse(saved);
+      if (saved) return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
     } catch (e) {
       console.warn('Failed to parse settings:', e);
     }
-    return {
-      browserNotificationsEnabled: true,
-      soundEnabled: true,
-      speechEnabled: false,
-      defaultSound: 'chime',
-      quietHours: {
-        enabled: false,
-        start: '22:00',
-        end: '07:00',
-      },
-    };
+    return DEFAULT_SETTINGS;
   });
 
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
@@ -247,6 +303,20 @@ export default function App() {
   const [permissionStatus, setPermissionStatus] = useState<
     NotificationPermission | 'unsupported'
   >(() => NotificationService.getPermissionStatus());
+
+  // Native reminder state (Android only).
+  const [nativeSetup, setNativeSetup] = useState<NotificationSetupResult | null>(null);
+  const [reminderNoticeDismissed, setReminderNoticeDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(REMINDER_NOTICE_DISMISSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  // Bumped after a cloud pull so the whole app reloads from localStorage.
+  const [dataEpoch, setDataEpoch] = useState(0);
+  // Bumped on any local data change so cloud sync can debounce.
+  const [localRevision, setLocalRevision] = useState(0);
 
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -261,6 +331,14 @@ export default function App() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [isFinanceModalOpen, setIsFinanceModalOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<FinanceTransaction | null>(null);
+  const [financeDraftDefaults, setFinanceDraftDefaults] = useState<{
+    type?: 'income' | 'expense';
+    accountId?: string;
+  } | null>(null);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [editingTransfer, setEditingTransfer] = useState<FinanceTransaction | null>(null);
   const [isDebtModalOpen, setIsDebtModalOpen] = useState(false);
   const [editingDebt, setEditingDebt] = useState<Debt | null>(null);
   const [isBillTemplateModalOpen, setIsBillTemplateModalOpen] = useState(false);
@@ -268,8 +346,7 @@ export default function App() {
   const [isSavingsModalOpen, setIsSavingsModalOpen] = useState(false);
   const [editingSavingsEntry, setEditingSavingsEntry] = useState<SavingsEntry | null>(null);
   const [recentlyDeletedTransaction, setRecentlyDeletedTransaction] = useState<{
-    tx: FinanceTransaction;
-    index: number;
+    txs: FinanceTransaction[];
   } | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeAlert, setActiveAlert] = useState<{ task: Task; triggeredAt: Date } | null>(null);
@@ -309,6 +386,12 @@ export default function App() {
       );
       setTransactions(materialized);
 
+      const savedAccounts = localStorage.getItem(userAccountsKey);
+      setAccounts(savedAccounts ? JSON.parse(savedAccounts) : []);
+
+      const savedLedgerSettings = localStorage.getItem(userLedgerSettingsKey);
+      setLedgerSettings(savedLedgerSettings ? JSON.parse(savedLedgerSettings) : []);
+
       const savedBudgets = localStorage.getItem(userBudgetsKey);
       setBudgets(savedBudgets ? JSON.parse(savedBudgets) : []);
 
@@ -345,10 +428,15 @@ export default function App() {
         currentUser?.id
       );
       setBillPayments(materializedPayments);
+
+      const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
+      setSettings(
+        savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS
+      );
     } catch (e) {
       console.warn('Error loading user data:', e);
     }
-  }, [currentUser?.id, userTasksKey, userCategoriesKey, userFinanceKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey]);
+  }, [currentUser?.id, dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   useEffect(() => {
@@ -362,6 +450,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(userFinanceKey, JSON.stringify(transactions));
   }, [transactions, userFinanceKey]);
+
+  useEffect(() => {
+    localStorage.setItem(userAccountsKey, JSON.stringify(accounts));
+  }, [accounts, userAccountsKey]);
+
+  useEffect(() => {
+    localStorage.setItem(userLedgerSettingsKey, JSON.stringify(ledgerSettings));
+  }, [ledgerSettings, userLedgerSettingsKey]);
 
   useEffect(() => {
     localStorage.setItem(userBudgetsKey, JSON.stringify(budgets));
@@ -401,10 +497,56 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
-  }, [settings]);
+    // Only stamp a settings edit when the serialized value actually changed
+    // since the last stamp. This keeps a cloud-pulled value from being
+    // re-stamped as the newest local edit (which would stop it propagating).
+    const serialized = JSON.stringify(settings);
+    const meta = readSyncMeta(storageKeys);
+    if (meta.settingsSnapshot === serialized) return;
+    writeSyncMeta(storageKeys, {
+      ...meta,
+      settingsUpdatedAt: new Date().toISOString(),
+      settingsSnapshot: serialized,
+    });
+  }, [settings, STORAGE_KEY_SETTINGS, storageKeys]);
+
+  // Single revision counter for every piece of user data -> drives cloud sync
+  // debouncing without wiring a callback into a dozen save effects.
+  useEffect(() => {
+    setLocalRevision((value) => value + 1);
+  }, [
+    tasks,
+    categories,
+    transactions,
+    accounts,
+    ledgerSettings,
+    budgets,
+    categoryBudgets,
+    debts,
+    savingsGoals,
+    savingsEntries,
+    billTemplates,
+    billPayments,
+  ]);
+
+  // Google Drive backup
+  const cloudSync = useCloudSync({
+    profileId: currentUser?.id ?? null,
+    revision: localRevision,
+    onDataApplied: () => setDataEpoch((value) => value + 1),
+  });
 
   // Request Notification Permission
   const handleRequestPermission = async () => {
+    if (isNativeAndroid()) {
+      const result = await ensureNotificationSetup();
+      setNativeSetup(result);
+      setPermissionStatus(result.granted ? 'granted' : 'denied');
+      if (result.granted) {
+        setSettings((prev) => ({ ...prev, browserNotificationsEnabled: true }));
+      }
+      return;
+    }
     const granted = await NotificationService.requestPermission();
     setPermissionStatus(NotificationService.getPermissionStatus());
     if (granted) {
@@ -417,8 +559,113 @@ export default function App() {
     setActiveAlert({ task, triggeredAt: new Date() });
   }, []);
 
-  // Recurring Reminder & Alarm Scheduler Engine
+  const handleOpenExactAlarmSettings = useCallback(() => {
+    void requestExactAlarmPermission();
+  }, []);
+
+  const dismissReminderNotice = useCallback(() => {
+    try {
+      localStorage.setItem(REMINDER_NOTICE_DISMISSED_KEY, '1');
+    } catch {
+      // ignore storage failures
+    }
+    setReminderNoticeDismissed(true);
+  }, []);
+
+  // Keep refs to the latest values so native listeners never capture stale data.
+  const tasksRef = useRef<Task[]>(tasks);
+  tasksRef.current = tasks;
+  const settingsRef = useRef<NotificationSettings>(settings);
+  settingsRef.current = settings;
+
+  // ---------------------------------------------------------------------
+  // Reminders
+  // ---------------------------------------------------------------------
+  // Native (Android): everything is a real AlarmManager entry, so it fires with
+  // the app closed. The browser polling loop below only runs on the web build.
   useEffect(() => {
+    if (!isNativeAndroid()) return;
+
+    let removeListeners: (() => void) | undefined;
+    let cancelled = false;
+
+    const boot = async () => {
+      // Hide the splash first: the notification permission dialog would
+      // otherwise appear on top of a blank splash screen with no context.
+      await SplashScreen.hide().catch(() => {});
+
+      const result = await ensureNotificationSetup();
+      if (cancelled) return;
+      setNativeSetup(result);
+      setPermissionStatus(result.granted ? 'granted' : 'denied');
+
+      removeListeners = await registerReminderListeners({
+        onDue: (taskId) => {
+          const task = tasksRef.current.find((t) => t.id === taskId);
+          if (task) setActiveAlert({ task, triggeredAt: new Date() });
+        },
+        onOpened: (taskId) => {
+          const task = tasksRef.current.find((t) => t.id === taskId);
+          if (!task) return;
+          setSelectedDate(task.date);
+          setActiveTab('today');
+          setActiveAlert({ task, triggeredAt: new Date() });
+        },
+      });
+    };
+
+    void boot();
+
+    return () => {
+      cancelled = true;
+      removeListeners?.();
+    };
+    // Boot once per app launch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reconcile the phone's alarms whenever tasks or reminder settings change.
+  useEffect(() => {
+    if (!isNativeAndroid() || !nativeSetup?.granted) return;
+    const timer = setTimeout(() => {
+      void syncScheduledNotifications(tasks, settings, { granted: true });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [tasks, settings, nativeSetup?.granted]);
+
+  // Coming back to the foreground: re-check permissions and reschedule, since
+  // Android drops alarms scheduled while exact-alarm access was revoked.
+  // Registered once; current settings are read through a ref.
+  useEffect(() => {
+    if (!isNativeAndroid()) return;
+    let remove: (() => void) | undefined;
+    void CapApp.addListener('appStateChange', ({ isActive }) => {
+      if (!isActive) return;
+      void (async () => {
+        const status = await getNativePermissionStatus();
+        const granted = status === 'granted';
+        setPermissionStatus(granted ? 'granted' : 'denied');
+        setNativeSetup((prev) => (prev ? { ...prev, granted } : prev));
+        if (granted) {
+          await syncScheduledNotifications(tasksRef.current, settingsRef.current, { granted: true });
+        }
+      })();
+    }).then((handle) => {
+      remove = () => {
+        try {
+          handle.remove();
+        } catch {
+          // already detached
+        }
+      };
+    });
+    return () => remove?.();
+  }, []);
+
+  // Web / PWA fallback: the original in-page poller, still useful in a tab.
+  useEffect(() => {
+    if (isNative()) return;
+
     const checkReminders = () => {
       const now = new Date();
       const currentYear = now.getFullYear();
@@ -447,7 +694,7 @@ export default function App() {
             const twoMinsAgo = now.getTime() - 120000;
 
             if (lastNotified < twoMinsAgo) {
-              NotificationService.sendTaskNotification(t, settings, handleTriggerAlert);
+              void NotificationService.sendTaskNotification(t, settings, handleTriggerAlert);
               return {
                 ...t,
                 reminder: {
@@ -466,6 +713,79 @@ export default function App() {
     const timer = setInterval(checkReminders, 5000);
     return () => clearInterval(timer);
   }, [settings, handleTriggerAlert]);
+
+  // Ask the WebView to keep this origin's data on disk (best effort).
+  useEffect(() => {
+    void requestPersistentStorage();
+  }, []);
+
+  // Android hardware back: close whatever is open instead of killing the app.
+  // The handler body is recreated every render and reached through a ref so the
+  // native listener is registered exactly once (re-registering on every modal
+  // change leaked listeners and made one back press fire several handlers).
+  const backHandlerRef = useRef<() => void>(() => {});
+  backHandlerRef.current = () => {
+    if (isTaskModalOpen) {
+      setIsTaskModalOpen(false);
+      setEditingTask(null);
+      return;
+    }
+    if (isFinanceModalOpen) {
+      setIsFinanceModalOpen(false);
+      setEditingTransaction(null);
+      return;
+    }
+    if (isDebtModalOpen) {
+      setIsDebtModalOpen(false);
+      setEditingDebt(null);
+      return;
+    }
+    if (isBillTemplateModalOpen) {
+      setIsBillTemplateModalOpen(false);
+      setEditingBillTemplate(null);
+      return;
+    }
+    if (isSavingsModalOpen) {
+      setIsSavingsModalOpen(false);
+      setEditingSavingsEntry(null);
+      return;
+    }
+    if (isSettingsOpen) {
+      setIsSettingsOpen(false);
+      return;
+    }
+    if (isAuthModalOpen) {
+      setIsAuthModalOpen(false);
+      return;
+    }
+    if (activeAlert) {
+      setActiveAlert(null);
+      return;
+    }
+    if (activeTab !== 'today') {
+      setActiveTab('today');
+      return;
+    }
+    // At the root screen: behave like a normal Android app and background it.
+    void CapApp.minimizeApp();
+  };
+
+  useEffect(() => {
+    if (!isNative()) return;
+    let remove: (() => void) | undefined;
+
+    void CapApp.addListener('backButton', () => backHandlerRef.current()).then((handle) => {
+      remove = () => {
+        try {
+          handle.remove();
+        } catch {
+          // already detached
+        }
+      };
+    });
+
+    return () => remove?.();
+  }, []);
 
   // Complete Task & Generate Next Recurring Task
   const handleToggleComplete = (taskId: string) => {
@@ -564,6 +884,7 @@ export default function App() {
 
   // Delete Task (with undo toast)
   const handleDeleteTask = (taskId: string) => {
+    markDeleted(storageKeys, [taskId]);
     setTasks((prev) => {
       const index = prev.findIndex((t) => t.id === taskId);
       if (index === -1) return prev;
@@ -577,6 +898,7 @@ export default function App() {
   // Undo the most recent deletion -- re-insert the task at its original index
   const handleUndoDelete = () => {
     if (!recentlyDeleted) return;
+    unmarkDeleted(storageKeys, [recentlyDeleted.task.id]);
     setTasks((prev) => {
       const copy = [...prev];
       copy.splice(recentlyDeleted.index, 0, recentlyDeleted.task);
@@ -590,6 +912,7 @@ export default function App() {
     const targetCat = categories.find((c) => c.id === catId);
     if (!targetCat) return;
 
+    markDeleted(storageKeys, [catId]);
     const remainingCats = categories.filter((c) => c.id !== catId);
     setCategories(remainingCats);
 
@@ -633,9 +956,34 @@ export default function App() {
 
   // Reset Data
   const handleResetTasks = () => {
-    setTasks(getInitialTasks().map((t) => ({ ...t, userId: currentUser?.id })));
+    // Tombstone everything that is about to disappear so a cloud merge on
+    // another device does not bring it back.
+    markDeleted(storageKeys, [
+      ...tasks.map((t) => t.id),
+      ...categories.map((c) => c.id),
+      ...transactions.map((t) => t.id),
+      ...accounts.map((a) => a.id),
+      ...ledgerSettings.map((s) => s.id),
+      ...budgets.map((b) => b.id),
+      ...categoryBudgets.map((b) => b.id),
+      ...debts.map((d) => d.id),
+      ...savingsGoals.map((g) => g.id),
+      ...savingsEntries.map((e) => e.id),
+      ...billTemplates.map((b) => b.id),
+      ...billPayments.map((p) => p.id),
+    ]);
+    if (isNativeAndroid()) void cancelAllTaskReminders();
+    const freshTasks = getInitialTasks().map((t) => ({ ...t, userId: currentUser?.id }));
+    setTasks(freshTasks);
     setCategories(INITIAL_CATEGORIES);
+    // The sample data is (re)created here, so clear any tombstones it inherits.
+    unmarkDeleted(storageKeys, [
+      ...freshTasks.map((t) => t.id),
+      ...INITIAL_CATEGORIES.map((c) => c.id),
+    ]);
     setTransactions([]);
+    setAccounts([]);
+    setLedgerSettings([]);
     setBudgets([]);
     setCategoryBudgets([]);
     setDebts([]);
@@ -656,6 +1004,8 @@ export default function App() {
         categories,
         settings,
         transactions,
+        accounts,
+        ledgerSettings,
         budgets,
         categoryBudgets,
         debts,
@@ -684,10 +1034,57 @@ export default function App() {
     reader.onload = (evt) => {
       try {
         const parsed = JSON.parse(evt.target?.result as string);
+
+        // Keep cloud sync honest: records the import removes get a tombstone,
+        // and records it brings back lose theirs.
+        const idOf = (list: unknown): string[] =>
+          Array.isArray(list)
+            ? list
+                .map((item) => (item && typeof item === 'object' ? (item as { id?: string }).id : undefined))
+                .filter((id): id is string => typeof id === 'string')
+            : [];
+
+        const currentIds = [
+          ...idOf(tasks),
+          ...idOf(categories),
+          ...idOf(transactions),
+          ...idOf(accounts),
+          ...idOf(ledgerSettings),
+          ...idOf(budgets),
+          ...idOf(categoryBudgets),
+          ...idOf(debts),
+          ...idOf(savingsGoals),
+          ...idOf(savingsEntries),
+          ...idOf(billTemplates),
+          ...idOf(billPayments),
+        ];
+        const importedIds = [
+          ...idOf(parsed.tasks),
+          ...idOf(parsed.categories),
+          ...idOf(parsed.transactions),
+          ...idOf(parsed.accounts),
+          ...idOf(parsed.ledgerSettings),
+          ...idOf(parsed.budgets),
+          ...idOf(parsed.categoryBudgets),
+          ...idOf(parsed.debts),
+          ...idOf(parsed.savingsGoals),
+          ...idOf(parsed.savingsEntries),
+          ...idOf(parsed.billTemplates),
+          ...idOf(parsed.billPayments),
+        ];
+        const importedSet = new Set(importedIds);
+        markDeleted(
+          storageKeys,
+          currentIds.filter((id) => !importedSet.has(id))
+        );
+        unmarkDeleted(storageKeys, Array.from(new Set(importedIds)));
+
         if (parsed.tasks) setTasks(parsed.tasks);
         if (parsed.categories) setCategories(parsed.categories);
         if (parsed.settings) setSettings(parsed.settings);
         if (parsed.transactions) setTransactions(parsed.transactions);
+        if (parsed.accounts) setAccounts(parsed.accounts);
+        if (parsed.ledgerSettings) setLedgerSettings(parsed.ledgerSettings);
         if (parsed.budgets) setBudgets(parsed.budgets);
         if (parsed.categoryBudgets) setCategoryBudgets(parsed.categoryBudgets);
         if (parsed.debts) setDebts(parsed.debts);
@@ -705,7 +1102,8 @@ export default function App() {
 
   // Finance handlers
   const handleSaveTransaction = (partial: Partial<FinanceTransaction>) => {
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
     if (partial.id) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -717,69 +1115,90 @@ export default function App() {
                 category: partial.category ?? t.category,
                 note: partial.note,
                 date: partial.date ?? t.date,
+                time: partial.time ?? t.time,
                 paymentMethod: partial.paymentMethod ?? t.paymentMethod,
+                accountId: partial.accountId,
                 recurrence: partial.recurrence ?? t.recurrence,
-                updatedAt: now,
+                updatedAt: nowIso,
               }
             : t
         )
       );
-    } else {
-      const recurrence = partial.recurrence || { type: 'none' as const };
-      const newTx: FinanceTransaction = {
-        id: `fin-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        userId: currentUser?.id,
-        type: partial.type || 'expense',
-        amount: partial.amount || 0,
-        category: partial.category || 'Other',
-        note: partial.note,
-        date: partial.date || selectedDate,
-        paymentMethod: partial.paymentMethod || DEFAULT_PAYMENT_METHOD,
-        recurrence,
-        recurrenceGroupId:
-          recurrence.type !== 'none'
-            ? `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-            : undefined,
-        createdAt: now,
-        updatedAt: now,
-      };
-      setTransactions((prev) => [newTx, ...prev]);
+      return;
     }
+
+    const recurrence = partial.recurrence || { type: 'none' as const };
+    const draft: EntryDraft = {
+      type: partial.type === 'income' ? 'income' : 'expense',
+      amount: partial.amount || 0,
+      accountId: partial.accountId,
+      category: partial.category || 'Other',
+      note: partial.note,
+      paymentMethod: partial.paymentMethod || DEFAULT_PAYMENT_METHOD,
+      date: partial.date || selectedDate,
+      time: partial.time,
+      recurrence,
+      recurrenceGroupId:
+        recurrence.type !== 'none'
+          ? `rec-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+          : undefined,
+    };
+
+    const validation = validateEntry(draft, {
+      accounts,
+      transactions,
+      settings: ledgerSettings[0] || { allowNegativeBalance: false },
+    });
+    if (isLedgerError(validation)) {
+      window.alert(validation.message);
+      return false;
+    }
+
+    const newTx = buildIncomeOrExpense(draft, { userId: currentUser?.id, now });
+    setTransactions((prev) => [newTx, ...prev]);
+    return true;
   };
 
   const handleDeleteTransaction = (id: string) => {
     const tx = transactions.find((t) => t.id === id);
     if (!tx) return;
+    const isTransfer = tx.type === 'transfer';
+    const hasLinkedFee = transactions.some((t) => t.linkedTransferId === id);
     const isRecurring = tx.recurrence?.type && tx.recurrence.type !== 'none';
-    const confirmMsg = isRecurring
+    const confirmMsg = isTransfer
+      ? hasLinkedFee
+        ? 'Delete this transfer and its linked ATM fee?'
+        : 'Delete this transfer?'
+      : isRecurring
       ? `Delete this entry only? The series will continue generating future entries.`
       : `Delete this transaction?`;
     if (!window.confirm(confirmMsg)) return;
-    setTransactions((prev) => {
-      const index = prev.findIndex((t) => t.id === id);
-      if (index === -1) return prev;
-      setRecentlyDeletedTransaction({ tx: prev[index], index });
-      // Clear any pending task undo toast to keep a single toast slot.
-      setRecentlyDeleted(null);
-      return prev.filter((t) => t.id !== id);
-    });
+
+    const removedIds = idsRemovedByCascade(transactions, id);
+    const removed = transactions.filter((t) => removedIds.includes(t.id));
+    markDeleted(storageKeys, removedIds);
+    setTransactions((prev) => removeTransactionCascade(prev, id));
+    setRecentlyDeletedTransaction({ txs: removed });
+    // Clear any pending task undo toast to keep a single toast slot.
+    setRecentlyDeleted(null);
   };
 
   const handleUndoDeleteTransaction = () => {
     if (!recentlyDeletedTransaction) return;
-    setTransactions((prev) => {
-      const copy = [...prev];
-      copy.splice(recentlyDeletedTransaction.index, 0, recentlyDeletedTransaction.tx);
-      return copy;
-    });
+    unmarkDeleted(
+      storageKeys,
+      recentlyDeletedTransaction.txs.map((t) => t.id)
+    );
+    setTransactions((prev) => upsertTransactions(prev, recentlyDeletedTransaction.txs));
     setRecentlyDeletedTransaction(null);
   };
 
   const handleSetBudget = (month: string, limit: number) => {
+    const now = new Date().toISOString();
     setBudgets((prev) => {
       const existing = prev.find((b) => b.month === month);
       if (existing) {
-        return prev.map((b) => (b.month === month ? { ...b, limit } : b));
+        return prev.map((b) => (b.month === month ? { ...b, limit, updatedAt: now } : b));
       }
       return [
         ...prev,
@@ -788,17 +1207,19 @@ export default function App() {
           userId: currentUser?.id,
           month,
           limit,
+          updatedAt: now,
         },
       ];
     });
   };
 
   const handleSetCategoryBudget = (month: string, category: string, limit: number) => {
+    const now = new Date().toISOString();
     setCategoryBudgets((prev) => {
       const existing = prev.find((b) => b.month === month && b.category === category);
       if (existing) {
         return prev.map((b) =>
-          b.month === month && b.category === category ? { ...b, limit } : b
+          b.month === month && b.category === category ? { ...b, limit, updatedAt: now } : b
         );
       }
       return [
@@ -809,37 +1230,194 @@ export default function App() {
           month,
           category,
           limit,
+          updatedAt: now,
         },
       ];
     });
   };
 
   const handleRemoveCategoryBudget = (month: string, category: string) => {
-    setCategoryBudgets((prev) =>
-      prev.filter((b) => !(b.month === month && b.category === category))
-    );
+    setCategoryBudgets((prev) => {
+      const removed = prev.filter((b) => b.month === month && b.category === category);
+      markDeleted(
+        storageKeys,
+        removed.map((b) => b.id)
+      );
+      return prev.filter((b) => !(b.month === month && b.category === category));
+    });
   };
 
   const handleQuickAddTransaction = (amount: number, category: string) => {
-    const now = new Date().toISOString();
-    const newTx: FinanceTransaction = {
-      id: `fin-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      userId: currentUser?.id,
+    const accountId = resolveDefaultAccountId(accounts, ledgerSettings[0]);
+    if (!accountId) {
+      setIsAccountModalOpen(true);
+      return;
+    }
+    const account = accounts.find((a) => a.id === accountId);
+    const draft: EntryDraft = {
       type: 'expense',
       amount,
+      accountId,
       category,
+      paymentMethod: account?.type === 'cash' ? 'cash' : 'bank_transfer',
       date: selectedDate,
-      paymentMethod: DEFAULT_PAYMENT_METHOD,
-      recurrence: { type: 'none' },
+      time: nowTimeString(),
+    };
+    const validation = validateEntry(draft, {
+      accounts,
+      transactions,
+      settings: ledgerSettings[0] || { allowNegativeBalance: false },
+    });
+    if (isLedgerError(validation)) {
+      window.alert(validation.message);
+      return;
+    }
+    const tx = buildIncomeOrExpense(draft, { userId: currentUser?.id });
+    setTransactions((prev) => [tx, ...prev]);
+  };
+
+  const openFinanceModal = (
+    tx?: FinanceTransaction | null,
+    defaults?: { type?: 'income' | 'expense'; accountId?: string }
+  ) => {
+    setEditingTransaction(tx || null);
+    setFinanceDraftDefaults(defaults || null);
+    setIsFinanceModalOpen(true);
+  };
+
+  // ===== Ledger handlers =====
+  const openAccountModal = (account?: Account | null) => {
+    setEditingAccount(account || null);
+    setIsAccountModalOpen(true);
+  };
+
+  const handleSaveAccount = (partial: Partial<Account>) => {
+    const now = new Date().toISOString();
+    const name = (partial.name || '').trim();
+    if (!name) return false;
+
+    if (partial.id) {
+      const existing = accounts.find((a) => a.id === partial.id);
+      if (!existing) return false;
+      if (!existing.isArchived && partial.isArchived) {
+        const confirmed = window.confirm(
+          `Archive "${existing.name}"? It stops appearing in totals and pickers, but all of its transactions are kept.`
+        );
+        // Refusing the confirmation must not silently drop the other edits.
+        if (!confirmed) return false;
+      }
+      setAccounts((prev) =>
+        prev.map((a) =>
+          a.id === partial.id
+            ? {
+                ...a,
+                name,
+                type: partial.type ?? a.type,
+                bankName: partial.bankName,
+                accountNickname: partial.accountNickname,
+                lastFourDigits: partial.lastFourDigits,
+                openingBalance: partial.openingBalance ?? a.openingBalance,
+                isArchived: partial.isArchived ?? a.isArchived,
+                updatedAt: now,
+              }
+            : a
+        )
+      );
+      return true;
+    }
+
+    const newAccount: Account = {
+      id: newLedgerId('acct'),
+      userId: currentUser?.id,
+      name,
+      type: partial.type || 'savings',
+      bankName: partial.bankName,
+      accountNickname: partial.accountNickname,
+      lastFourDigits: partial.lastFourDigits,
+      openingBalance: partial.openingBalance ?? 0,
+      isArchived: false,
       createdAt: now,
       updatedAt: now,
     };
-    setTransactions((prev) => [newTx, ...prev]);
+    setAccounts((prev) => [...prev, newAccount]);
+    return true;
   };
 
-  const openFinanceModal = (tx?: FinanceTransaction | null) => {
-    setEditingTransaction(tx || null);
-    setIsFinanceModalOpen(true);
+  const openTransferModal = (tx?: FinanceTransaction | null) => {
+    setEditingTransfer(tx || null);
+    setIsTransferModalOpen(true);
+  };
+
+  const handleSaveTransfer = (draft: TransferDraft) => {
+    const validation = validateTransfer(draft, {
+      accounts,
+      transactions,
+      settings: ledgerSettings[0] || { allowNegativeBalance: false },
+    });
+    if (isLedgerError(validation)) {
+      window.alert(validation.message);
+      return false;
+    }
+
+    const transfer = buildTransfer(draft, { userId: currentUser?.id });
+    const original = draft.id ? transactions.find((t) => t.id === draft.id) : undefined;
+    if (original) {
+      transfer.createdAt = original.createdAt;
+      transfer.recurrence = original.recurrence;
+    }
+
+    const records: FinanceTransaction[] = [transfer];
+    const hasExistingFee = transactions.some((t) => t.linkedTransferId === transfer.id);
+    if (!original && draft.atmFee && draft.atmFee > 0) {
+      records.push(
+        buildAtmFee(transfer, draft.atmFee, {
+          userId: currentUser?.id,
+          category: 'Bills & Utilities',
+          paymentMethod: 'cash',
+        })
+      );
+    }
+    if (hasExistingFee) {
+      // Keep the linked fee in sync with an edited transfer's account and date.
+      for (const tx of transactions) {
+        if (tx.linkedTransferId !== transfer.id) continue;
+        if (tx.date === transfer.date && tx.accountId === transfer.accountId) continue;
+        records.push({
+          ...tx,
+          date: transfer.date,
+          accountId: transfer.accountId,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    setTransactions((prev) => upsertTransactions(prev, records));
+    return true;
+  };
+
+  const handleUpdateLedgerSettings = (partial: Partial<LedgerSettings>) => {
+    const now = new Date().toISOString();
+    setLedgerSettings((prev) => {
+      if (prev.length === 0) {
+        return [
+          {
+            id: 'ledger',
+            userId: currentUser?.id,
+            allowNegativeBalance: false,
+            ...partial,
+            updatedAt: now,
+          },
+        ];
+      }
+      return prev.map((settingsRecord, index) =>
+        index === 0 ? { ...settingsRecord, ...partial, updatedAt: now } : settingsRecord
+      );
+    });
+  };
+
+  const handleBulkAssignAccount = (txIds: string[], accountId: string) => {
+    if (txIds.length === 0 || !accountId) return;
+    setTransactions((prev) => assignAccountToTransactions(prev, txIds, accountId));
   };
 
   const handleQuickAdd = () => {
@@ -893,6 +1471,7 @@ export default function App() {
     const debt = debts.find((d) => d.id === id);
     if (!debt) return;
     if (!window.confirm(`Delete this debt for ${debt.personName}?`)) return;
+    markDeleted(storageKeys, [id]);
     setDebts((prev) => prev.filter((d) => d.id !== id));
   };
 
@@ -918,10 +1497,11 @@ export default function App() {
 
   // Savings goal handler
   const handleSetSavingsGoal = (month: string, target: number) => {
+    const now = new Date().toISOString();
     setSavingsGoals((prev) => {
       const existing = prev.find((g) => g.month === month);
       if (existing) {
-        return prev.map((g) => (g.month === month ? { ...g, target } : g));
+        return prev.map((g) => (g.month === month ? { ...g, target, updatedAt: now } : g));
       }
       return [
         ...prev,
@@ -930,6 +1510,7 @@ export default function App() {
           userId: currentUser?.id,
           month,
           target,
+          updatedAt: now,
         },
       ];
     });
@@ -954,6 +1535,7 @@ export default function App() {
                 category: partial.category ?? t.category,
                 dueDayOfMonth: partial.dueDayOfMonth ?? t.dueDayOfMonth,
                 paymentMethod: partial.paymentMethod ?? t.paymentMethod,
+                accountId: partial.accountId,
                 active: partial.active ?? t.active,
                 note: partial.note,
                 updatedAt: now,
@@ -970,6 +1552,7 @@ export default function App() {
         category: partial.category || 'Other',
         dueDayOfMonth: partial.dueDayOfMonth || 1,
         paymentMethod: partial.paymentMethod || DEFAULT_PAYMENT_METHOD,
+        accountId: partial.accountId,
         active: partial.active ?? true,
         note: partial.note,
         createdAt: now,
@@ -988,6 +1571,7 @@ export default function App() {
       )
     )
       return;
+    markDeleted(storageKeys, [id, ...billPayments.filter((p) => p.billId === id && !p.paid).map((p) => p.id)]);
     setBillTemplates((prev) => prev.filter((t) => t.id !== id));
     // Remove future unpaid payments for this template; keep paid ones for history.
     setBillPayments((prev) =>
@@ -1000,21 +1584,34 @@ export default function App() {
   const handleToggleBillPaid = (payment: BillPayment) => {
     const template = billTemplates.find((t) => t.id === payment.billId);
     if (!payment.paid) {
-      // Marking as paid: create a finance transaction.
-      const now = new Date().toISOString();
-      const newTx: FinanceTransaction = {
-        id: `fin-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        userId: currentUser?.id,
+      // Marking as paid: create a finance transaction against the template's
+      // account (falling back to the default account).
+      const accountId =
+        template?.accountId || resolveDefaultAccountId(accounts, ledgerSettings[0]);
+      const account = accounts.find((a) => a.id === accountId);
+      const draft: EntryDraft = {
         type: 'expense',
         amount: payment.amount,
+        accountId,
         category: template?.category || 'Other',
         note: `${template?.name || 'Bill'} payment`,
+        paymentMethod:
+          template?.paymentMethod || (account?.type === 'cash' ? 'cash' : 'bank_transfer'),
         date: payment.dueDate,
-        paymentMethod: template?.paymentMethod || DEFAULT_PAYMENT_METHOD,
-        recurrence: { type: 'none' },
-        createdAt: now,
-        updatedAt: now,
+        time: nowTimeString(),
       };
+      const validation = validateEntry(draft, {
+        accounts,
+        transactions,
+        settings: ledgerSettings[0] || { allowNegativeBalance: false },
+      });
+      if (isLedgerError(validation)) {
+        window.alert(validation.message);
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const newTx = buildIncomeOrExpense(draft, { userId: currentUser?.id });
       setTransactions((prev) => [newTx, ...prev]);
       setBillPayments((prev) =>
         prev.map((p) =>
@@ -1032,7 +1629,8 @@ export default function App() {
     } else {
       // Un-ticking: delete the linked transaction.
       if (payment.transactionId) {
-        setTransactions((prev) => prev.filter((t) => t.id !== payment.transactionId));
+        markDeleted(storageKeys, idsRemovedByCascade(transactions, payment.transactionId));
+        setTransactions((prev) => removeTransactionCascade(prev, payment.transactionId as string));
       }
       setBillPayments((prev) =>
         prev.map((p) =>
@@ -1112,6 +1710,7 @@ export default function App() {
   };
 
   const handleDeleteSavingsEntry = (id: string) => {
+    markDeleted(storageKeys, [id]);
     setSavingsEntries((prev) => prev.filter((e) => e.id !== id));
   };
 
@@ -1243,7 +1842,7 @@ export default function App() {
     categoryFilter !== 'all' || priorityFilter !== 'all' || tagFilter !== 'all' || statusFilter !== 'all' || searchQuery !== '';
 
   return (
-    <div className={`min-h-screen font-sans selection:bg-indigo-500 selection:text-white pb-24 lg:pb-8 transition-colors duration-200 ${
+    <div className={`min-h-dvh font-sans selection:bg-indigo-500 selection:text-white pb-[calc(6rem+env(safe-area-inset-bottom,0px))] lg:pb-8 lg:pl-64 transition-colors duration-200 ${
       theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-stone-50 text-slate-900'
     }`}>
       {/* App Header */}
@@ -1257,6 +1856,8 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenAuth={() => setIsAuthModalOpen(true)}
       />
+
+      <InstallPrompt />
 
       {/* Triggered Alarm / Notification Banner */}
       <NotificationBanner
@@ -1281,7 +1882,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="max-w-5xl lg:max-w-6xl mx-auto px-4 py-5 lg:pl-20 lg:pr-8">
+      <main className="max-w-5xl lg:max-w-6xl mx-auto px-4 py-5 lg:pl-6 lg:pr-8">
         {/* TODAY VIEW */}
         {activeTab === 'today' && (
           <div className="space-y-5">
@@ -1316,10 +1917,10 @@ export default function App() {
                   title="Filter by Priority"
                   options={[
                     { value: 'all', label: 'All Priorities' },
-                    { value: 'urgent', label: '🔴 Urgent' },
-                    { value: 'high', label: '🟠 High' },
-                    { value: 'medium', label: '🔵 Medium' },
-                    { value: 'low', label: '🟢 Low' },
+                    { value: 'urgent', label: '?? Urgent' },
+                    { value: 'high', label: '?? High' },
+                    { value: 'medium', label: '?? Medium' },
+                    { value: 'low', label: '?? Low' },
                   ]}
                 />
 
@@ -1367,8 +1968,8 @@ export default function App() {
                   accent="indigo"
                   options={[
                     { value: 'time', label: 'Sort by Time' },
-                    { value: 'priority-desc', label: 'Priority (Urgent → Low)' },
-                    { value: 'priority-asc', label: 'Priority (Low → Urgent)' },
+                    { value: 'priority-desc', label: 'Priority (Urgent ? Low)' },
+                    { value: 'priority-asc', label: 'Priority (Low ? Urgent)' },
                     { value: 'title', label: 'Title (A-Z)' },
                   ]}
                 />
@@ -1416,6 +2017,23 @@ export default function App() {
                   Clear all
                 </button>
               </div>
+            )}
+
+            {/* Native reminder reliability nudge (Android only, dismissible) */}
+            {isNativeAndroid() && !reminderNoticeDismissed && (
+              <ReminderReliabilityCard
+                state={
+                  nativeSetup
+                    ? {
+                        permissionGranted: nativeSetup.granted,
+                        exactAlarm: nativeSetup.exactAlarm,
+                      }
+                    : null
+                }
+                onRequestPermission={() => void handleRequestPermission()}
+                onOpenExactAlarmSettings={handleOpenExactAlarmSettings}
+                onDismiss={dismissReminderNotice}
+              />
             )}
 
             {/* Daily Completion Progress Banner */}
@@ -1557,6 +2175,22 @@ export default function App() {
             financeAlerts={financeAlerts}
             selectedDate={selectedDate}
             onSelectDate={setSelectedDate}
+            ledger={{
+              accounts,
+              transactions,
+              ledgerSettings,
+              selectedDate,
+              onAddIncome: (accountId) => openFinanceModal(null, { type: 'income', accountId }),
+              onAddExpense: (accountId) => openFinanceModal(null, { type: 'expense', accountId }),
+              onTransfer: () => openTransferModal(null),
+              onAddAccount: () => openAccountModal(null),
+              onEditAccount: (account) => openAccountModal(account),
+              onEditTransaction: (tx) => openFinanceModal(tx),
+              onEditTransfer: (tx) => openTransferModal(tx),
+              onDeleteTransaction: handleDeleteTransaction,
+              onUpdateLedgerSettings: handleUpdateLedgerSettings,
+              onBulkAssignAccount: handleBulkAssignAccount,
+            }}
             onAddTransaction={() => openFinanceModal(null)}
             onEditTransaction={(tx) => openFinanceModal(tx)}
             onDeleteTransaction={handleDeleteTransaction}
@@ -1613,16 +2247,56 @@ export default function App() {
       />
 
       {/* Add / Edit Finance Transaction Modal */}
-      <FinanceModal
-        isOpen={isFinanceModalOpen}
-        onClose={() => {
-          setIsFinanceModalOpen(false);
-          setEditingTransaction(null);
-        }}
-        onSave={handleSaveTransaction}
-        initialTransaction={editingTransaction}
-        selectedDate={selectedDate}
-      />
+      {isFinanceModalOpen && (
+        <FinanceModal
+          isOpen={isFinanceModalOpen}
+          onClose={() => {
+            setIsFinanceModalOpen(false);
+            setEditingTransaction(null);
+            setFinanceDraftDefaults(null);
+          }}
+          onSave={handleSaveTransaction}
+          initialTransaction={editingTransaction}
+          selectedDate={selectedDate}
+          accounts={accounts}
+          transactions={transactions}
+          ledgerSettings={ledgerSettings}
+          initialType={financeDraftDefaults?.type}
+          initialAccountId={financeDraftDefaults?.accountId}
+        />
+      )}
+
+      {/* Add / Edit Ledger Account Modal */}
+      {isAccountModalOpen && (
+        <AccountModal
+          isOpen={isAccountModalOpen}
+          onClose={() => {
+            setIsAccountModalOpen(false);
+            setEditingAccount(null);
+          }}
+          onSave={handleSaveAccount}
+          initialAccount={editingAccount}
+          accounts={accounts}
+          transactions={transactions}
+        />
+      )}
+
+      {/* Transfer Money Modal */}
+      {isTransferModalOpen && (
+        <TransferModal
+          isOpen={isTransferModalOpen}
+          onClose={() => {
+            setIsTransferModalOpen(false);
+            setEditingTransfer(null);
+          }}
+          onSave={handleSaveTransfer}
+          accounts={accounts}
+          transactions={transactions}
+          ledgerSettings={ledgerSettings}
+          initialTransfer={editingTransfer}
+          selectedDate={selectedDate}
+        />
+      )}
 
       {/* Add / Edit Debt Modal */}
       <DebtModal
@@ -1645,6 +2319,7 @@ export default function App() {
         }}
         onSave={handleSaveBillTemplate}
         initialTemplate={editingBillTemplate}
+        accounts={accounts}
       />
 
       {/* Add / Edit Savings Entry Modal */}
@@ -1670,6 +2345,14 @@ export default function App() {
         onResetTasks={handleResetTasks}
         onExportData={handleExportData}
         onImportData={handleImportData}
+        cloudSync={cloudSync}
+        nativeReminderState={
+          isNativeAndroid() && nativeSetup
+            ? { permissionGranted: nativeSetup.granted, exactAlarm: nativeSetup.exactAlarm }
+            : null
+        }
+        nextReminder={isNativeAndroid() ? describeNextReminder(tasks, settings) : null}
+        onRequestExactAlarm={handleOpenExactAlarmSettings}
       />
 
       {/* Auth Modal */}
@@ -1695,7 +2378,7 @@ export default function App() {
           message={`Transaction of ${new Intl.NumberFormat('en-IN', {
             style: 'currency',
             currency: 'INR',
-          }).format(recentlyDeletedTransaction.tx.amount)} deleted`}
+          }).format(recentlyDeletedTransaction.txs[0]?.amount ?? 0)} deleted`}
           onUndo={handleUndoDeleteTransaction}
           onDismiss={() => setRecentlyDeletedTransaction(null)}
         />

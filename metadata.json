@@ -1,6 +1,6 @@
 {
   "name": "Daily Tasks Management",
-  "description": "Mobile-friendly daily task management web app with recurring reminders, browser notifications, sound alerts, time-blocking planner, and focus timer.",
+  "description": "Daily task, focus-session and personal-finance app. Ships as a React PWA and as a sideloadable Android app (Capacitor) with native reminders and optional Google Drive backup.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

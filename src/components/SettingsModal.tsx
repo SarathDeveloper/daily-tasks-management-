@@ -1,7 +1,10 @@
 import React from 'react';
-import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette } from 'lucide-react';
+import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette, Clock, AlertTriangle } from 'lucide-react';
 import { NotificationSettings, SoundType } from '../types';
 import { audioService } from '../services/audioService';
+import { CloudSyncSection } from './CloudSyncSection';
+import type { CloudSyncApi } from '../hooks/useCloudSync';
+import type { ReminderReliabilityState } from './ReminderReliabilityCard';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -13,6 +16,12 @@ interface SettingsModalProps {
   onResetTasks: () => void;
   onExportData: () => void;
   onImportData: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  cloudSync: CloudSyncApi;
+  /** Android-only reminder capability snapshot. */
+  nativeReminderState: ReminderReliabilityState | null;
+  /** e.g. "Morning standup - in 42 min" */
+  nextReminder: string | null;
+  onRequestExactAlarm: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -25,6 +34,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onResetTasks,
   onExportData,
   onImportData,
+  cloudSync,
+  nativeReminderState,
+  nextReminder,
+  onRequestExactAlarm,
 }) => {
   if (!isOpen) return null;
 
@@ -33,8 +46,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in transition-colors">
+    <div className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center sm:items-center p-0 sm:p-4 bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-t-2xl sm:rounded-2xl w-full min-w-0 max-w-lg shadow-2xl overflow-hidden animate-in fade-in transition-colors pb-[env(safe-area-inset-bottom,0px)] sm:pb-0">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -50,7 +63,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-5 space-y-5 text-xs overflow-y-auto max-h-[80vh]">
+        <div className="p-5 space-y-5 text-xs overflow-y-auto max-h-[calc(92dvh-4.5rem)] sm:max-h-[70vh]">
           {/* Appearance / Theme Toggle */}
           <div className="space-y-2 bg-slate-50 dark:bg-slate-950/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
             <h3 className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-1.5">
@@ -147,6 +160,56 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
+          {/* Reminder delivery (native Android only) */}
+          {nativeReminderState && (
+            <div className="space-y-2 bg-slate-50 dark:bg-slate-950/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
+              <h3 className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-1.5">
+                {nativeReminderState.permissionGranted &&
+                nativeReminderState.exactAlarm !== 'denied' &&
+                nativeReminderState.exactAlarm !== 'prompt' ? (
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                )}
+                <span>Reminder Delivery</span>
+              </h3>
+
+              <div className="text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
+                <p className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                  <span>{nextReminder ?? 'No upcoming reminder scheduled'}</span>
+                </p>
+                <p className="text-slate-500 dark:text-slate-400">
+                  Notifications: {nativeReminderState.permissionGranted ? 'allowed' : 'blocked'}
+                </p>
+                <p className="text-slate-500 dark:text-slate-400">
+                  Exact alarms:{' '}
+                  {nativeReminderState.exactAlarm === 'granted'
+                    ? 'allowed'
+                    : nativeReminderState.exactAlarm === 'unsupported'
+                    ? 'not applicable on this Android version'
+                    : 'may be delayed'}
+                </p>
+              </div>
+
+              {(nativeReminderState.exactAlarm === 'denied' ||
+                nativeReminderState.exactAlarm === 'prompt') && (
+                <button
+                  type="button"
+                  onClick={onRequestExactAlarm}
+                  className="w-full py-2 px-3 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 border border-amber-200 dark:border-amber-800/60 text-amber-700 dark:text-amber-300 font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  Allow exact alarms
+                </button>
+              )}
+
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
+                If reminders still arrive late, set Settings &gt; Apps &gt; Daily Tasks &gt; Battery to
+                Unrestricted.
+              </p>
+            </div>
+          )}
+
           {/* Quiet Hours */}
           <div className="space-y-3 bg-slate-50 dark:bg-slate-950/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
             <div className="flex items-center justify-between">
@@ -200,6 +263,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             )}
           </div>
+
+          {/* Cloud backup */}
+          <CloudSyncSection sync={cloudSync} />
 
           {/* Backup & Data Controls */}
           <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">

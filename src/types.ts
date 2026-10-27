@@ -60,6 +60,7 @@ export interface Category {
   name: string;
   color: string; // hex or tailwind color name
   icon: string; // lucide icon identifier
+  updatedAt?: string;
 }
 
 export interface NotificationSettings {
@@ -76,9 +77,56 @@ export interface NotificationSettings {
 
 export type ActiveTab = 'today' | 'timeline' | 'focus' | 'categories' | 'stats' | 'finance' | 'settings';
 
-export type TransactionType = 'expense' | 'income';
+// ---------------------------------------------------------------------------
+// Money ledger: accounts
+// ---------------------------------------------------------------------------
 
-export type PaymentMethod = 'cash' | 'upi' | 'card' | 'bank';
+export type AccountType = 'cash' | 'savings' | 'current' | 'other';
+
+export interface Account {
+  id: string;
+  userId?: string;
+  name: string; // "YES Bank", "Indian Bank", "Cash Wallet"
+  type: AccountType;
+  bankName?: string;
+  accountNickname?: string;
+  lastFourDigits?: string;
+  /** Balance the account held before the first tracked transaction, in rupees. */
+  openingBalance: number;
+  /** Archived accounts keep their history but are excluded from totals/pickers. */
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Ledger-wide preferences. Stored as an array (one record, id = 'ledger') so it
+ * rides the same record-level sync/merge path as every other collection.
+ */
+export interface LedgerSettings {
+  id: string;
+  userId?: string;
+  allowNegativeBalance: boolean;
+  defaultAccountId?: string;
+  updatedAt: string;
+}
+
+/**
+ * `transfer` moves money between two accounts and is never counted as income
+ * or expense. `upi` and `bank` are legacy payment methods kept so entries
+ * created before the ledger existed still render correctly.
+ */
+export type TransactionType = 'expense' | 'income' | 'transfer';
+
+export type PaymentMethod =
+  | 'cash'
+  | 'gpay'
+  | 'phonepe'
+  | 'bank_transfer'
+  | 'card'
+  | 'other'
+  | 'upi'
+  | 'bank';
 
 export type FinanceRecurrenceType = 'none' | 'daily' | 'weekly' | 'monthly';
 
@@ -95,7 +143,14 @@ export interface FinanceTransaction {
   category: string;
   note?: string;
   date: string; // YYYY-MM-DD
+  time?: string; // HH:mm (optional)
   paymentMethod?: PaymentMethod;
+  /** Funding account for expenses / receiving account for income. */
+  accountId?: string;
+  /** Transfers only: the account money lands in. */
+  destinationAccountId?: string;
+  /** Links an ATM-fee expense to the transfer that produced it. */
+  linkedTransferId?: string;
   recurrence: FinanceRecurrence;
   recurrenceGroupId?: string; // links generated instances in a series
   createdAt: string;
@@ -107,6 +162,7 @@ export interface MonthlyBudget {
   userId?: string;
   month: string; // YYYY-MM
   limit: number;
+  updatedAt?: string;
 }
 
 export interface CategoryBudget {
@@ -115,6 +171,7 @@ export interface CategoryBudget {
   month: string; // YYYY-MM
   category: string;
   limit: number;
+  updatedAt?: string;
 }
 
 export type DebtDirection = 'lent' | 'owed';
@@ -139,6 +196,7 @@ export interface SavingsGoal {
   userId?: string;
   month: string; // YYYY-MM
   target: number;
+  updatedAt?: string;
 }
 
 export interface SavingsEntry {
@@ -165,6 +223,7 @@ export interface BillTemplate {
   category: string; // expense category
   dueDayOfMonth: number; // 1-31
   paymentMethod?: PaymentMethod;
+  accountId?: string; // account the bill is paid from (optional)
   active: boolean; // false = paused
   note?: string;
   createdAt: string;

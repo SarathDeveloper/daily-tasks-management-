@@ -17,7 +17,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     { id: 'today', label: 'Today', icon: Calendar },
     { id: 'timeline', label: 'Time', icon: Clock },
     { id: 'focus', label: 'Focus', icon: Zap },
-    { id: 'categories', label: 'Cats', icon: Folder },
+    { id: 'categories', label: 'Lists', icon: Folder },
     { id: 'finance', label: 'Money', icon: Wallet },
     { id: 'stats', label: 'Stats', icon: TrendingUp },
   ];
@@ -34,8 +34,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       </button>
 
       {/* Fixed Bottom Navigation Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 px-2 py-1.5 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] sm:px-6 transition-colors select-none lg:hidden">
-        <div className="max-w-md mx-auto flex items-center justify-around">
+      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 px-1 py-1 pb-[calc(0.35rem+env(safe-area-inset-bottom,0px))] transition-colors select-none lg:hidden">
+        <div className="max-w-lg mx-auto grid grid-cols-6">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -44,14 +44,14 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               <button
                 key={tab.id}
                 onClick={() => onChangeTab(tab.id as ActiveTab)}
-                className={`flex flex-col items-center justify-center min-h-[44px] min-w-[40px] py-1 px-1 rounded-xl transition-all active:scale-95 ${
+                className={`flex flex-col items-center justify-center min-h-[44px] w-full min-w-0 py-1 px-0.5 rounded-xl transition-all active:scale-95 touch-manipulation ${
                   isActive
-                    ? 'text-indigo-600 dark:text-indigo-400 font-bold scale-105'
+                    ? 'text-indigo-600 dark:text-indigo-400 font-bold'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-medium'
                 }`}
               >
                 <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
-                <span className="text-[9px] mt-0.5 tracking-tight">{tab.label}</span>
+                <span className="text-[10px] mt-0.5 tracking-tight leading-none">{tab.label}</span>
               </button>
             );
           })}

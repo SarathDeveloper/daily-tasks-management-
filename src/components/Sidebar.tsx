@@ -29,9 +29,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   });
 
   return (
-    <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-64 z-30 flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 px-4 py-5 select-none">
+    <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-64 z-30 flex-col overflow-hidden bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 px-4 py-5 select-none">
       {/* Brand */}
-      <div className="flex items-center gap-3 px-1 mb-6">
+      <div className="flex items-center gap-3 px-1 mb-6 shrink-0">
         <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-md shadow-indigo-500/20 shrink-0">
           <span className="font-bold text-lg leading-none">✓</span>
         </div>
@@ -46,7 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Nav items */}
-      <nav className="flex flex-col gap-1 flex-1">
+      <nav className="flex flex-col gap-1 flex-1 min-h-0 overflow-y-auto">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -72,7 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* New Task / Finance entry button (replaces FAB on desktop) */}
       <button
         onClick={onOpenQuickAdd}
-        className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 hover:opacity-90 active:scale-95 transition-all"
+        className="mt-4 w-full shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 hover:opacity-90 active:scale-95 transition-all"
         title={activeTab === 'finance' ? 'Add Transaction' : 'Quick Add Task'}
       >
         <Plus className="w-4 h-4" />

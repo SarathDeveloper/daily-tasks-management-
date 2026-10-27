@@ -1,18 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { X, Receipt } from 'lucide-react';
-import { BillTemplate, PaymentMethod } from '../types';
+import { Account, BillTemplate, PaymentMethod } from '../types';
 import {
   EXPENSE_CATEGORIES,
   PAYMENT_METHODS,
   DEFAULT_PAYMENT_METHOD,
+  accountTypeMeta,
 } from '../data/financeCategories';
 import { Button } from './ui/Button';
+import { accountLabel } from '../lib/ledger';
 
 interface BillTemplateModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (template: Partial<BillTemplate>) => void;
   initialTemplate?: BillTemplate | null;
+  accounts: Account[];
 }
 
 export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
@@ -20,14 +23,18 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
   onClose,
   onSave,
   initialTemplate,
+  accounts,
 }) => {
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
   const [dueDayOfMonth, setDueDayOfMonth] = useState('1');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(DEFAULT_PAYMENT_METHOD);
+  const [accountId, setAccountId] = useState<string>('');
   const [active, setActive] = useState(true);
   const [note, setNote] = useState('');
+
+  const activeAccounts = accounts.filter((a) => !a.isArchived);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -37,6 +44,7 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
       setCategory(initialTemplate.category);
       setDueDayOfMonth(String(initialTemplate.dueDayOfMonth));
       setPaymentMethod(initialTemplate.paymentMethod || DEFAULT_PAYMENT_METHOD);
+      setAccountId(initialTemplate.accountId || '');
       setActive(initialTemplate.active);
       setNote(initialTemplate.note || '');
     } else {
@@ -45,6 +53,7 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
       setCategory(EXPENSE_CATEGORIES[0]);
       setDueDayOfMonth('1');
       setPaymentMethod(DEFAULT_PAYMENT_METHOD);
+      setAccountId('');
       setActive(true);
       setNote('');
     }
@@ -66,6 +75,7 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
       category,
       dueDayOfMonth: parsedDay,
       paymentMethod,
+      accountId: accountId || undefined,
       active,
       note: note.trim() || undefined,
     });
@@ -73,8 +83,8 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[92vh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center sm:items-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 rounded-t-2xl sm:rounded-2xl w-full min-w-0 max-w-md max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/80 dark:bg-slate-900/90 shrink-0">
           <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <Receipt className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
@@ -177,6 +187,27 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
                 </button>
               ))}
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Paid from account (optional)
+            </label>
+            <select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="">Use default account</option>
+              {activeAccounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {accountTypeMeta(a.type).emoji} {accountLabel(a)}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+              Marking this bill paid debits the selected account.
+            </p>
           </div>
 
           <div>

@@ -35,23 +35,37 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-4 py-3 sm:px-6 lg:pl-20 lg:pr-8 transition-colors shadow-xs">
-      <div className="max-w-5xl lg:max-w-6xl mx-auto flex items-center justify-between">
-        {/* Brand & Date */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-md shadow-indigo-500/20">
+    <header className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 px-4 pt-[calc(0.75rem+env(safe-area-inset-top,0px))] pb-3 sm:px-6 lg:pl-6 lg:pr-8 transition-colors shadow-xs">
+      <div className="max-w-5xl lg:max-w-6xl mx-auto flex items-center justify-between gap-2">
+        {/* Brand & Date - the sidebar already shows these on desktop */}
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 lg:hidden">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white shadow-md shadow-indigo-500/20 shrink-0">
             <span className="font-bold text-lg leading-none">✓</span>
           </div>
-          <div>
-            <h1 className="font-bold text-base sm:text-lg tracking-tight leading-none text-slate-900 dark:text-white">
+          <div className="min-w-0">
+            <h1 className="font-bold text-base sm:text-lg tracking-tight leading-none text-slate-900 dark:text-white truncate">
               Daily Tasks
             </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{todayFormatted}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">{todayFormatted}</p>
           </div>
-        </div>        {/* Right Actions */}
-        <div className="flex items-center gap-0.5 sm:gap-2">
+        </div>
+        {/* Right Actions */}
+        <div className="flex items-center gap-0.5 sm:gap-2 shrink-0 ml-auto">
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            className="sm:hidden min-h-[36px] min-w-[36px] rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800"
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? (
+              <Sun className="w-4 h-4 text-amber-500" />
+            ) : (
+              <Moon className="w-4 h-4" />
+            )}
+          </button>
+
           {/* Light / Dark Mode Toggle Button */}
-          <div className="flex items-center bg-slate-200 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-300 dark:border-slate-700">
+          <div className="hidden sm:flex items-center bg-slate-200 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-300 dark:border-slate-700">
             <button
               type="button"
               onClick={onToggleTheme}
@@ -100,7 +114,7 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   {currentUser.name.charAt(0).toUpperCase()}
                 </div>
-                <span className="max-w-[70px] sm:max-w-[100px] truncate">{currentUser.name.split(' ')[0]}</span>
+                <span className="hidden sm:inline max-w-[100px] truncate">{currentUser.name.split(' ')[0]}</span>
               </>
             ) : (
               <>
