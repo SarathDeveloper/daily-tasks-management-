@@ -1,4 +1,4 @@
-# Daily Tasks
+# Dayflow
 
 A personal daily OS for tasks, focus sessions, and spending — built with React + Vite. Plan your day on the Today view, run Pomodoro sessions in the Focus Room, track income/expenses with budgets, debts, and savings goals, and keep everything local to your device.
 

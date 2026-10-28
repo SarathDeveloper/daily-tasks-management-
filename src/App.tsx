@@ -10,6 +10,7 @@ import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
 import { DateBar } from './components/DateBar';
+import { CalendarView } from './components/CalendarView';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
 import { TimelineView } from './components/TimelineView';
@@ -316,7 +317,7 @@ export default function App() {
     return [];
   });
 
-  // Streak is fully derived from entries — compute synchronously so the UI
+  // Streak is fully derived from entries ï¿½ compute synchronously so the UI
   // never shows a stale streak after an add/edit/delete.
   const savingsStreak = useMemo<SavingsStreakState>(
     () => deriveStreakState(savingsEntries),
@@ -1643,7 +1644,7 @@ export default function App() {
   };
 
   const handleQuickAdd = () => {
-    if (activeTab === 'finance') {
+    if (activeTab === 'today' || activeTab === 'finance') {
       openFinanceModal(null);
     } else {
       setEditingTask(null);
@@ -2338,6 +2339,28 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === 'calendar' && (
+          <CalendarView
+            selectedDate={selectedDate}
+            onSelectDate={setSelectedDate}
+            tasks={tasks}
+            habits={habits}
+            checkIns={habitCheckIns}
+            transactions={transactions}
+            onToggleTask={handleToggleComplete}
+            onEditTask={(task) => {
+              setEditingTask(task);
+              setIsTaskModalOpen(true);
+            }}
+            onToggleCheckIn={handleToggleCheckIn}
+            onAddTask={() => {
+              setEditingTask(null);
+              setIsTaskModalOpen(true);
+            }}
+            onAddFinance={(type) => openFinanceModal(null, { type })}
+          />
+        )}
+
         {/* TIMELINE VIEW */}
         {activeTab === 'timeline' && (
           <TimelineView
@@ -2479,6 +2502,8 @@ export default function App() {
         activeTab={activeTab}
         onChangeTab={setActiveTab}
         onOpenQuickAdd={handleQuickAdd}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenProfile={() => setIsAuthModalOpen(true)}
       />
 
       {/* Add / Edit Task Modal */}

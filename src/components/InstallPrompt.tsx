@@ -61,7 +61,7 @@ export const InstallPrompt: React.FC = () => {
     <div className="lg:hidden border-b border-indigo-200 dark:border-indigo-800/50 bg-indigo-50 dark:bg-indigo-950/40 px-4 py-2.5">
       <div className="max-w-5xl mx-auto flex items-center gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold text-slate-900 dark:text-white">Install Daily Tasks</p>
+          <p className="text-xs font-bold text-slate-900 dark:text-white">Install Dayflow</p>
           <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
             {deferred
               ? 'Add it to your home screen and open it like an app.'

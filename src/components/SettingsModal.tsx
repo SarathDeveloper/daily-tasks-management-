@@ -204,7 +204,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
 
               <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
-                If reminders still arrive late, set Settings &gt; Apps &gt; Daily Tasks &gt; Battery to
+                If reminders still arrive late, set Settings &gt; Apps &gt; Dayflow &gt; Battery to
                 Unrestricted.
               </p>
             </div>

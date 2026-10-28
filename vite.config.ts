@@ -21,8 +21,8 @@ export default defineConfig(({mode}) => {
         registerType: 'autoUpdate',
         includeAssets: ['icons/favicon-32.png', 'icons/apple-touch-icon.png'],
         manifest: {
-          name: 'Daily Tasks',
-          short_name: 'Daily Tasks',
+          name: 'Dayflow',
+          short_name: 'Dayflow',
           description: 'Tasks, focus sessions, and spending on your phone.',
           theme_color: '#ffffff',
           background_color: '#fafaf9',

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Clock, Zap, Folder, TrendingUp, Wallet, Plus, Target, Repeat } from 'lucide-react';
+import { Calendar, Clock, Zap, Folder, TrendingUp, Wallet, Plus, Target, Repeat, CalendarDays } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface SidebarProps {
@@ -15,13 +15,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const tabs = [
     { id: 'today', label: 'Today', icon: Calendar },
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays },
     { id: 'timeline', label: 'Timeline', icon: Clock },
     { id: 'focus', label: 'Focus', icon: Zap },
     { id: 'goals', label: 'Goals', icon: Target },
     { id: 'habits', label: 'Habits', icon: Repeat },
     { id: 'categories', label: 'Categories', icon: Folder },
     { id: 'finance', label: 'Finance', icon: Wallet },
-    { id: 'stats', label: 'Stats', icon: TrendingUp },
+    { id: 'stats', label: 'Streak', icon: TrendingUp },
   ];
 
   const todayFormatted = new Date().toLocaleDateString('en-US', {
@@ -39,7 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <div>
           <h1 className="font-bold text-base tracking-tight leading-none text-slate-900 dark:text-white">
-            Daily Tasks
+            Dayflow
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             {todayFormatted}
@@ -75,10 +76,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <button
         onClick={onOpenQuickAdd}
         className="mt-4 w-full shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 hover:opacity-90 active:scale-95 transition-all"
-        title={activeTab === 'finance' ? 'Add Transaction' : 'Quick Add Task'}
+        title={activeTab === 'today' || activeTab === 'finance' ? 'Add Expense or Income' : 'Quick Add Task'}
       >
         <Plus className="w-4 h-4" />
-        <span>{activeTab === 'finance' ? 'New Entry' : 'New Task'}</span>
+        <span>{activeTab === 'today' || activeTab === 'finance' ? 'New Entry' : 'New Task'}</span>
       </button>
     </aside>
   );

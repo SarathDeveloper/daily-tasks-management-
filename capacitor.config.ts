@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.ksan.dailytasks',
-  appName: 'Daily Tasks',
+  appName: 'Dayflow',
   webDir: 'dist',
   android: {
     allowMixedContent: false,

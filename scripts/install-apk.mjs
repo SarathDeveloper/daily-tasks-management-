@@ -44,7 +44,7 @@ function runAdb(args) {
 console.log(`Installing ${apk}`);
 const status = runAdb(['install', '-r', apk]);
 if (status === 0) {
-  console.log('\nInstalled. Launch it from the app drawer ("Daily Tasks").');
+  console.log('\nInstalled. Launch it from the app drawer ("Dayflow").');
 } else {
   console.error('\nInstall failed. Check that the phone is connected and USB debugging is on.');
 }

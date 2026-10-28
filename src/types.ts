@@ -75,7 +75,7 @@ export interface NotificationSettings {
   };
 }
 
-export type ActiveTab = 'today' | 'timeline' | 'focus' | 'goals' | 'habits' | 'categories' | 'stats' | 'finance' | 'settings';
+export type ActiveTab = 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'categories' | 'stats' | 'finance' | 'settings';
 
 export type GoalStatus = 'active' | 'paused' | 'completed';
 

@@ -1,5 +1,5 @@
 {
-  "name": "Daily Tasks Management",
+  "name": "Dayflow",
   "description": "Daily task, focus-session and personal-finance app. Ships as a React PWA and as a sideloadable Android app (Capacitor) with native reminders and optional Google Drive backup.",
   "requestFramePermissions": [],
   "majorCapabilities": []
