@@ -2,6 +2,9 @@ import { SoundType } from '../types';
 
 class AudioService {
   private ctx: AudioContext | null = null;
+  private loopTimer: number | null = null;
+  private fileAudio: HTMLAudioElement | null = null;
+  private fileUrl: string | null = null;
 
   private getAudioContext(): AudioContext {
     if (!this.ctx) {
@@ -130,6 +133,46 @@ class AudioService {
       osc.start(now + idx * 0.12);
       osc.stop(now + idx * 0.12 + 0.95);
     });
+  }
+
+  /** Play a picked song. `loop` keeps it going until `stopLoop`. */
+  public playFile(blob: Blob, loop: boolean): void {
+    this.stopLoop();
+    try {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.loop = loop;
+      void audio.play().catch((e) => console.warn('Song playback failed:', e));
+      this.fileAudio = audio;
+      this.fileUrl = url;
+    } catch (e) {
+      console.warn('Song playback failed:', e);
+    }
+  }
+
+  /** Repeat a built-in chime until `stopLoop`. Local music uses `playFile`. */
+  public startLoop(soundType: SoundType, speechText?: string): void {
+    this.stopLoop();
+    const tick = () => this.playSound(soundType === 'music' || soundType === 'voice' ? 'chime' : soundType, speechText);
+    tick();
+    this.loopTimer = window.setInterval(tick, 1600);
+  }
+
+  public stopLoop(): void {
+    if (this.loopTimer !== null) {
+      window.clearInterval(this.loopTimer);
+      this.loopTimer = null;
+    }
+    if (this.fileAudio) {
+      this.fileAudio.pause();
+      this.fileAudio.src = '';
+      this.fileAudio = null;
+    }
+    if (this.fileUrl) {
+      URL.revokeObjectURL(this.fileUrl);
+      this.fileUrl = null;
+    }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }
 
   public playAmbientNoise(type: 'rain' | 'focus', durationSec: number = 30): () => void {

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -26,12 +26,24 @@ import { BillTemplateModal } from './components/BillTemplateModal';
 import { SavingsModal } from './components/SavingsModal';
 import { HabitsView } from './components/HabitsView';
 import { TodayHabitsCard } from './components/TodayHabitsCard';
+import { TodayAlarmCard } from './components/TodayAlarmCard';
+import { AlarmsView } from './components/AlarmsView';
+import { AlarmRingOverlay } from './components/AlarmRingOverlay';
 import { HabitModal } from './components/HabitModal';
 import { GoalsView } from './components/GoalsView';
+import { DiaryView } from './components/DiaryView';
+import { DiaryEntryModal } from './components/DiaryEntryModal';
+import { TodayDiaryCard } from './components/TodayDiaryCard';
 import { materializeRecurringTransactions } from './lib/financeRecurrence';
 import { materializeBillPayments } from './lib/billMaterializer';
 import { deriveStreakState } from './lib/savingsStreak';
+import {
+  countedSavingsAmounts,
+  isSavingsBucketType,
+  resolveSavingsDestinationId,
+} from './lib/savingsLedger';
 import { checkBudgetAlerts, formatAlertMessage } from './lib/budgetAlerts';
+import { currentTimeString, diaryPreview, isDiaryMood, validateDiaryDraft } from './lib/diary';
 import { DEFAULT_PAYMENT_METHOD } from './data/financeCategories';
 import {
   buildAtmFee,
@@ -43,6 +55,7 @@ import {
   resolveDefaultAccountId,
   isLedgerError,
   nowTimeString,
+  todayString,
   newLedgerId,
   upsertTransactions,
   validateEntry,
@@ -84,7 +97,19 @@ import {
   unmarkDeleted,
   writeSyncMeta,
 } from './lib/persistence';
-import { describeNextReminder } from './lib/reminders';
+import { buildReminderPlans, describeNextReminder } from './lib/reminders';
+import { resolveReminderDelivery } from './lib/sounds';
+import {
+  alarmDueAt,
+  applyAlarmRingEvent,
+  applyHabitRingEvent,
+  applyTaskRingEvent,
+  upcomingRings,
+  type RingSession,
+} from './lib/alarms';
+import { hasLocalMusic } from './lib/localMusic';
+import { DayflowAlarm } from './services/dayflowAlarm';
+import { audioService } from './services/audioService';
 import { habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
 import { useCloudSync } from './hooks/useCloudSync';
 import { CloudSyncSection } from './components/CloudSyncSection';
@@ -155,6 +180,8 @@ export default function App() {
   const userGoalsKey = storageKeys.goals;
   const userHabitsKey = storageKeys.habits;
   const userHabitCheckInsKey = storageKeys.habitCheckIns;
+  const userAlarmsKey = storageKeys.alarms;
+  const userDiaryKey = storageKeys.diaryEntries;
   const STORAGE_KEY_SETTINGS = storageKeys.settings;
 
   // 1. Core State
@@ -321,11 +348,36 @@ export default function App() {
   });
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
 
-  // Streak is fully derived from entries — compute synchronously so the UI
-  // never shows a stale streak after an add/edit/delete.
+  const [alarms, setAlarms] = useState<Alarm[]>(() => {
+    try {
+      const saved = localStorage.getItem(userAlarmsKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse alarms:', e);
+    }
+    return [];
+  });
+  const [ringing, setRinging] = useState<RingSession | null>(null);
+  const [musicReady, setMusicReady] = useState(false);
+
+  const [diaryEntries, setDiaryEntries] = useState<DiaryEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem(userDiaryKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse diary entries:', e);
+    }
+    return [];
+  });
+  const [isDiaryModalOpen, setIsDiaryModalOpen] = useState(false);
+  const [editingDiaryEntry, setEditingDiaryEntry] = useState<DiaryEntry | null>(null);
+  const [diaryDraftDate, setDiaryDraftDate] = useState(todayStr);
+  const [recentlyDeletedDiary, setRecentlyDeletedDiary] = useState<{ entry: DiaryEntry; index: number } | null>(null);
+
+  // Streak counts legacy logs plus transfers of new money into savings, gold, or stocks.
   const savingsStreak = useMemo<SavingsStreakState>(
-    () => deriveStreakState(savingsEntries),
-    [savingsEntries]
+    () => deriveStreakState(countedSavingsAmounts(savingsEntries, transactions, accounts)),
+    [savingsEntries, transactions, accounts]
   );
 
   const [settings, setSettings] = useState<NotificationSettings>(() => {
@@ -385,6 +437,8 @@ export default function App() {
   const [editingBillTemplate, setEditingBillTemplate] = useState<BillTemplate | null>(null);
   const [isSavingsModalOpen, setIsSavingsModalOpen] = useState(false);
   const [editingSavingsEntry, setEditingSavingsEntry] = useState<SavingsEntry | null>(null);
+  const [editingSavingsTransfer, setEditingSavingsTransfer] = useState<FinanceTransaction | null>(null);
+  const [savingsPresetAmount, setSavingsPresetAmount] = useState<number | null>(null);
   const [recentlyDeletedTransaction, setRecentlyDeletedTransaction] = useState<{
     txs: FinanceTransaction[];
   } | null>(null);
@@ -478,6 +532,12 @@ export default function App() {
       const savedHabitCheckIns = localStorage.getItem(userHabitCheckInsKey);
       setHabitCheckIns(savedHabitCheckIns ? JSON.parse(savedHabitCheckIns) : []);
 
+      const savedAlarms = localStorage.getItem(userAlarmsKey);
+      setAlarms(savedAlarms ? JSON.parse(savedAlarms) : []);
+
+      const savedDiary = localStorage.getItem(userDiaryKey);
+      setDiaryEntries(savedDiary ? JSON.parse(savedDiary) : []);
+
       const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
       setSettings(
         savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS
@@ -485,7 +545,7 @@ export default function App() {
     } catch (e) {
       console.warn('Error loading user data:', e);
     }
-  }, [currentUser?.id, dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, STORAGE_KEY_SETTINGS]);
+  }, [currentUser?.id, dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   useEffect(() => {
@@ -553,6 +613,14 @@ export default function App() {
   }, [habitCheckIns, userHabitCheckInsKey]);
 
   useEffect(() => {
+    localStorage.setItem(userAlarmsKey, JSON.stringify(alarms));
+  }, [alarms, userAlarmsKey]);
+
+  useEffect(() => {
+    localStorage.setItem(userDiaryKey, JSON.stringify(diaryEntries));
+  }, [diaryEntries, userDiaryKey]);
+
+  useEffect(() => {
     localStorage.setItem(userSavingsStreakKey, JSON.stringify(savingsStreak));
   }, [savingsStreak, userSavingsStreakKey]);
 
@@ -591,6 +659,8 @@ export default function App() {
     goals,
     habits,
     habitCheckIns,
+    alarms,
+    diaryEntries,
   ]);
 
   // Google Drive backup
@@ -647,6 +717,12 @@ export default function App() {
   habitCheckInsRef.current = habitCheckIns;
   const goalsRef = useRef<Goal[]>(goals);
   goalsRef.current = goals;
+  const alarmsRef = useRef<Alarm[]>(alarms);
+  alarmsRef.current = alarms;
+  const musicReadyRef = useRef(musicReady);
+  musicReadyRef.current = musicReady;
+  const ringingRef = useRef<RingSession | null>(ringing);
+  ringingRef.current = ringing;
 
   // ---------------------------------------------------------------------
   // Reminders
@@ -702,14 +778,52 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void hasLocalMusic().then((ready) => {
+      if (!cancelled) setMusicReady(ready);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.localMusicName]);
+
+  const pushNativeSchedule = useCallback((granted: boolean) => {
+    if (!isNativeAndroid()) return;
+    const ready = musicReadyRef.current;
+    if (granted) {
+      void syncScheduledNotifications(
+        tasksRef.current,
+        settingsRef.current,
+        { granted: true },
+        habitsRef.current,
+        habitCheckInsRef.current,
+        goalsRef.current,
+        ready
+      );
+    }
+    const plans = buildReminderPlans(
+      tasksRef.current,
+      settingsRef.current,
+      new Date(),
+      habitsRef.current,
+      habitCheckInsRef.current,
+      goalsRef.current,
+      ready
+    );
+    void DayflowAlarm.sync({ plans: upcomingRings(plans, alarmsRef.current, new Date()) }).catch((e) => {
+      console.warn('Failed to sync ringing alarms:', e);
+    });
+  }, []);
+
   // Reconcile the phone's alarms whenever tasks or reminder settings change.
   useEffect(() => {
-    if (!isNativeAndroid() || !nativeSetup?.granted) return;
+    if (!isNativeAndroid()) return;
     const timer = setTimeout(() => {
-      void syncScheduledNotifications(tasks, settings, { granted: true }, habits, habitCheckIns, goals);
+      pushNativeSchedule(Boolean(nativeSetup?.granted));
     }, 600);
     return () => clearTimeout(timer);
-  }, [tasks, settings, habits, habitCheckIns, goals, nativeSetup?.granted]);
+  }, [tasks, settings, habits, habitCheckIns, goals, alarms, musicReady, nativeSetup?.granted, pushNativeSchedule]);
 
   // Coming back to the foreground: re-check permissions and reschedule, since
   // Android drops alarms scheduled while exact-alarm access was revoked.
@@ -724,15 +838,16 @@ export default function App() {
         const granted = status === 'granted';
         setPermissionStatus(granted ? 'granted' : 'denied');
         setNativeSetup((prev) => (prev ? { ...prev, granted } : prev));
-        if (granted) {
-          await syncScheduledNotifications(
-            tasksRef.current,
-            settingsRef.current,
-            { granted: true },
-            habitsRef.current,
-            habitCheckInsRef.current,
-            goalsRef.current
-          );
+        pushNativeSchedule(granted);
+        try {
+          const { events } = await DayflowAlarm.consumeEvents();
+          for (const event of events ?? []) {
+            if (event.kind === 'task') setTasks((prev) => applyTaskRingEvent(prev, event));
+            else if (event.kind === 'habit') setHabits((prev) => applyHabitRingEvent(prev, event));
+            else setAlarms((prev) => applyAlarmRingEvent(prev, event));
+          }
+        } catch (e) {
+          console.warn('Could not read alarm events:', e);
         }
       })();
     }).then((handle) => {
@@ -745,6 +860,36 @@ export default function App() {
       };
     });
     return () => remove?.();
+  }, []);
+
+  useEffect(() => {
+    if (!isNativeAndroid()) return;
+    let remove = () => {};
+    const applyQueued = async () => {
+      try {
+        const { events } = await DayflowAlarm.consumeEvents();
+        for (const event of events ?? []) {
+          if (event.kind === 'task') setTasks((prev) => applyTaskRingEvent(prev, event));
+          else if (event.kind === 'habit') setHabits((prev) => applyHabitRingEvent(prev, event));
+          else setAlarms((prev) => applyAlarmRingEvent(prev, event));
+        }
+      } catch (e) {
+        console.warn('Could not read alarm events:', e);
+      }
+    };
+    void applyQueued();
+    void DayflowAlarm.addListener('alarmEvent', () => {
+      void applyQueued();
+    }).then((handle) => {
+      remove = () => {
+        try {
+          handle.remove();
+        } catch {
+          // already detached
+        }
+      };
+    });
+    return () => remove();
   }, []);
 
   // Web / PWA fallback: the original in-page poller, still useful in a tab.
@@ -779,6 +924,25 @@ export default function App() {
             const twoMinsAgo = now.getTime() - 120000;
 
             if (lastNotified < twoMinsAgo) {
+              const delivery = resolveReminderDelivery(
+                t.reminder.sound,
+                t.reminder.alarm,
+                musicReadyRef.current,
+                settings.defaultSound
+              );
+              if (delivery.ring) {
+                if (ringingRef.current?.id !== t.id) {
+                  setRinging({
+                    id: t.id,
+                    kind: 'task',
+                    title: t.title,
+                    body: t.time || '',
+                    sound: delivery.sound,
+                    snoozeMinutes: 10,
+                  });
+                }
+                return t;
+              }
               void NotificationService.sendTaskNotification(t, settings, handleTriggerAlert);
               return {
                 ...t,
@@ -806,15 +970,43 @@ export default function App() {
           );
           if (isComplete(habit, entry) || isSkipped(entry)) return habit;
 
+          if (habit.reminder.snoozedUntil && new Date(habit.reminder.snoozedUntil) > now) return habit;
+
           const [hours, minutes] = habit.reminder.time.split(':').map(Number);
           if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return habit;
           const remindAtMins = hours * 60 + minutes;
-          if (currentMins < remindAtMins || currentMins > remindAtMins + 2) return habit;
+          const snoozeAt = habit.reminder.snoozedUntil ? new Date(habit.reminder.snoozedUntil) : null;
+          const snoozeDue = Boolean(
+            snoozeAt && snoozeAt <= now && now.getTime() - snoozeAt.getTime() <= 120000
+          );
+          const timeDue = currentMins >= remindAtMins && currentMins <= remindAtMins + 2;
+          if (!snoozeDue && !timeDue) return habit;
 
           const lastNotified = habit.reminder.lastNotifiedAt
             ? new Date(habit.reminder.lastNotifiedAt).getTime()
             : 0;
           if (lastNotified >= now.getTime() - 120000) return habit;
+
+          const occurrenceId = `habit:${habit.id}:${todayDateStr}`;
+          const delivery = resolveReminderDelivery(
+            habit.reminder.sound,
+            habit.reminder.alarm,
+            musicReadyRef.current,
+            settings.defaultSound
+          );
+          if (delivery.ring) {
+            if (ringingRef.current?.id !== occurrenceId) {
+              setRinging({
+                id: occurrenceId,
+                kind: 'habit',
+                title: habit.title,
+                body: habit.reminder.time,
+                sound: delivery.sound,
+                snoozeMinutes: 10,
+              });
+            }
+            return habit;
+          }
 
           void NotificationService.sendSimpleNotification(
             `Habit: ${habit.title}`,
@@ -832,6 +1024,22 @@ export default function App() {
         });
         return changed ? next : prev;
       });
+
+      for (const alarm of alarmsRef.current) {
+        const due = alarmDueAt(alarm, now);
+        if (!due) continue;
+        if (ringingRef.current?.id === alarm.id) break;
+        const delivery = resolveReminderDelivery(alarm.sound, true, musicReadyRef.current, settings.defaultSound);
+        setRinging({
+          id: alarm.id,
+          kind: 'alarm',
+          title: alarm.label || 'Alarm',
+          body: alarm.time,
+          sound: delivery.sound,
+          snoozeMinutes: alarm.snoozeMinutes || 10,
+        });
+        break;
+      }
     };
 
     const timer = setInterval(checkReminders, 5000);
@@ -845,12 +1053,80 @@ export default function App() {
 
   const closeHabitModalRef = useRef<(() => void) | null>(null);
   const closeGoalModalRef = useRef<(() => void) | null>(null);
+  const closeDiaryModalRef = useRef<(() => void) | null>(null);
   const registerHabitClose = useCallback((close: (() => void) | null) => {
     closeHabitModalRef.current = close;
   }, []);
   const registerGoalClose = useCallback((close: (() => void) | null) => {
     closeGoalModalRef.current = close;
   }, []);
+  const registerDiaryClose = useCallback((close: (() => void) | null) => {
+    closeDiaryModalRef.current = close;
+  }, []);
+
+  useEffect(() => {
+    if (!isDiaryModalOpen) return;
+    registerDiaryClose(() => {
+      setIsDiaryModalOpen(false);
+      setEditingDiaryEntry(null);
+    });
+    return () => registerDiaryClose(null);
+  }, [isDiaryModalOpen, registerDiaryClose]);
+
+  const finishRing = (type: 'dismiss' | 'snooze') => {
+    const current = ringingRef.current;
+    if (!current) return;
+    const event = {
+      type,
+      id: current.id,
+      kind: current.kind,
+      at: Date.now(),
+      snoozeMinutes: current.snoozeMinutes,
+    };
+    if (current.kind === 'task') setTasks((prev) => applyTaskRingEvent(prev, event));
+    else if (current.kind === 'habit') setHabits((prev) => applyHabitRingEvent(prev, event));
+    else setAlarms((prev) => applyAlarmRingEvent(prev, event));
+    setRinging(null);
+    audioService.stopLoop();
+  };
+
+  const handleSaveAlarm = (partial: Partial<Alarm>) => {
+    const now = new Date().toISOString();
+    if (partial.id) {
+      setAlarms((prev) =>
+        prev.map((alarm) =>
+          alarm.id === partial.id
+            ? {
+                ...alarm,
+                ...partial,
+                label: partial.label?.trim() || alarm.label,
+                daysOfWeek: partial.daysOfWeek ?? alarm.daysOfWeek,
+                updatedAt: now,
+              }
+            : alarm
+        )
+      );
+      return;
+    }
+    const created: Alarm = {
+      id: newLedgerId('alarm'),
+      userId: currentUser?.id,
+      label: partial.label?.trim() || 'Alarm',
+      time: partial.time || '07:00',
+      enabled: partial.enabled ?? true,
+      daysOfWeek: partial.daysOfWeek ?? [],
+      sound: partial.sound || 'chime',
+      snoozeMinutes: partial.snoozeMinutes || 10,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setAlarms((prev) => [created, ...prev]);
+  };
+
+  const handleDeleteAlarm = (id: string) => {
+    markDeleted(storageKeys, [id]);
+    setAlarms((prev) => prev.filter((alarm) => alarm.id !== id));
+  };
 
   // Android hardware back: close whatever is open instead of killing the app.
   // The handler body is recreated every render and reached through a ref so the
@@ -858,6 +1134,16 @@ export default function App() {
   // change leaked listeners and made one back press fire several handlers).
   const backHandlerRef = useRef<() => void>(() => {});
   backHandlerRef.current = () => {
+    if (ringing) {
+      finishRing('dismiss');
+      return;
+    }
+    if (closeDiaryModalRef.current) {
+      const close = closeDiaryModalRef.current;
+      closeDiaryModalRef.current = null;
+      close();
+      return;
+    }
     if (editingHabit) {
       setEditingHabit(null);
       return;
@@ -897,6 +1183,8 @@ export default function App() {
     if (isSavingsModalOpen) {
       setIsSavingsModalOpen(false);
       setEditingSavingsEntry(null);
+      setEditingSavingsTransfer(null);
+      setSavingsPresetAmount(null);
       return;
     }
     if (isSettingsOpen) {
@@ -1038,8 +1326,9 @@ export default function App() {
       const index = prev.findIndex((t) => t.id === taskId);
       if (index === -1) return prev;
       setRecentlyDeleted({ task: prev[index], index });
-      // Clear any pending finance undo toast to keep a single toast slot.
+      // Clear any pending undo toast to keep a single toast slot.
       setRecentlyDeletedTransaction(null);
+      setRecentlyDeletedDiary(null);
       return prev.filter((t) => t.id !== taskId);
     });
   };
@@ -1123,6 +1412,7 @@ export default function App() {
       ...goals.map((g) => g.id),
       ...habits.map((h) => h.id),
       ...habitCheckIns.map((c) => c.id),
+      ...diaryEntries.map((entry) => entry.id),
     ]);
     if (isNativeAndroid()) void cancelAllTaskReminders();
     const freshTasks = getInitialTasks().map((t) => ({ ...t, userId: currentUser?.id }));
@@ -1148,6 +1438,9 @@ export default function App() {
     setGoals([]);
     setHabits([]);
     setHabitCheckIns([]);
+    setAlarms([]);
+    setDiaryEntries([]);
+    setRecentlyDeletedDiary(null);
     setIsSettingsOpen(false);
   };
 
@@ -1172,6 +1465,8 @@ export default function App() {
         goals,
         habits,
         habitCheckIns,
+        alarms,
+        diaryEntries,
         user: currentUser,
       }, null, 2)],
       { type: 'application/json' }
@@ -1218,6 +1513,8 @@ export default function App() {
           ...idOf(goals),
           ...idOf(habits),
           ...idOf(habitCheckIns),
+          ...idOf(alarms),
+          ...idOf(diaryEntries),
         ];
         const importedIds = [
           ...idOf(parsed.tasks),
@@ -1235,6 +1532,8 @@ export default function App() {
           ...idOf(parsed.goals),
           ...idOf(parsed.habits),
           ...idOf(parsed.habitCheckIns),
+          ...idOf(parsed.alarms),
+          ...idOf(parsed.diaryEntries),
         ];
         const importedSet = new Set(importedIds);
         markDeleted(
@@ -1259,6 +1558,8 @@ export default function App() {
         if (parsed.goals) setGoals(parsed.goals);
         if (parsed.habits) setHabits(parsed.habits);
         if (parsed.habitCheckIns) setHabitCheckIns(parsed.habitCheckIns);
+        if (parsed.alarms) setAlarms(parsed.alarms);
+        if (parsed.diaryEntries) setDiaryEntries(parsed.diaryEntries);
         alert('Data successfully imported!');
       } catch (err) {
         alert('Invalid JSON file format.');
@@ -1321,7 +1622,9 @@ export default function App() {
           enabled: true as const,
           time: partial.reminder.time || '08:00',
           sound: partial.reminder.sound,
+          alarm: partial.reminder.alarm || undefined,
           lastNotifiedAt: partial.reminder.lastNotifiedAt,
+          snoozedUntil: partial.reminder.snoozedUntil,
         }
       : undefined;
     const targetCount = partial.targetCount && partial.targetCount > 1 ? partial.targetCount : undefined;
@@ -1340,7 +1643,11 @@ export default function App() {
                 targetCount,
                 unit: targetCount ? partial.unit?.trim() || undefined : undefined,
                 reminder: reminder
-                  ? { ...reminder, lastNotifiedAt: habit.reminder?.lastNotifiedAt }
+                  ? {
+                      ...reminder,
+                      lastNotifiedAt: habit.reminder?.lastNotifiedAt,
+                      snoozedUntil: habit.reminder?.snoozedUntil,
+                    }
                   : undefined,
                 updatedAt: now,
               }
@@ -1373,6 +1680,80 @@ export default function App() {
     markDeleted(storageKeys, [id, ...removedChecks]);
     setHabits((prev) => prev.filter((habit) => habit.id !== id));
     setHabitCheckIns((prev) => prev.filter((entry) => entry.habitId !== id));
+  };
+
+  const openDiaryComposer = (date: string, entry: DiaryEntry | null = null) => {
+    setEditingDiaryEntry(entry);
+    setDiaryDraftDate(entry?.date || date);
+    setIsDiaryModalOpen(true);
+  };
+
+  const handleSaveDiaryEntry = (partial: Partial<DiaryEntry>) => {
+    const mood = partial.mood && isDiaryMood(partial.mood) ? partial.mood : 'okay';
+    const draft = {
+      date: partial.date || selectedDate,
+      time: partial.time || currentTimeString(),
+      mood,
+      body: partial.body || '',
+    };
+    const error = validateDiaryDraft(draft);
+    if (error) {
+      window.alert(error);
+      return;
+    }
+    const now = new Date().toISOString();
+    const savedMood = draft.mood as DiaryMood;
+    if (partial.id) {
+      setDiaryEntries((prev) =>
+        prev.map((entry) =>
+          entry.id === partial.id
+            ? {
+                ...entry,
+                date: draft.date,
+                time: draft.time,
+                mood: savedMood,
+                body: draft.body.trim(),
+                updatedAt: now,
+              }
+            : entry
+        )
+      );
+      return;
+    }
+    const created: DiaryEntry = {
+      id: newLedgerId('diary'),
+      userId: currentUser?.id,
+      date: draft.date,
+      time: draft.time,
+      mood: savedMood,
+      body: draft.body.trim(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    setDiaryEntries((prev) => [created, ...prev]);
+  };
+
+  const handleDeleteDiaryEntry = (id: string) => {
+    markDeleted(storageKeys, [id]);
+    setDiaryEntries((prev) => {
+      const index = prev.findIndex((entry) => entry.id === id);
+      if (index === -1) return prev;
+      setRecentlyDeletedDiary({ entry: prev[index], index });
+      setRecentlyDeleted(null);
+      setRecentlyDeletedTransaction(null);
+      return prev.filter((entry) => entry.id !== id);
+    });
+  };
+
+  const handleUndoDeleteDiary = () => {
+    if (!recentlyDeletedDiary) return;
+    unmarkDeleted(storageKeys, [recentlyDeletedDiary.entry.id]);
+    setDiaryEntries((prev) => {
+      const copy = [...prev];
+      copy.splice(recentlyDeletedDiary.index, 0, recentlyDeletedDiary.entry);
+      return copy;
+    });
+    setRecentlyDeletedDiary(null);
   };
 
   const handleSetCheckIn = (habitId: string, date: string, patch: HabitCheckInPatch | null) => {
@@ -1501,8 +1882,9 @@ export default function App() {
     markDeleted(storageKeys, removedIds);
     setTransactions((prev) => removeTransactionCascade(prev, id));
     setRecentlyDeletedTransaction({ txs: removed });
-    // Clear any pending task undo toast to keep a single toast slot.
+    // Clear any pending undo toast to keep a single toast slot.
     setRecentlyDeleted(null);
+    setRecentlyDeletedDiary(null);
   };
 
   const handleUndoDeleteTransaction = () => {
@@ -1714,6 +2096,30 @@ export default function App() {
     }
 
     setTransactions((prev) => upsertTransactions(prev, records));
+
+    const destination = accounts.find((account) => account.id === transfer.destinationAccountId);
+    if (destination && isSavingsBucketType(destination.type)) {
+      const stamp = new Date().toISOString();
+      setLedgerSettings((prev) => {
+        if (prev[0]?.defaultSavingsAccountId === destination.id) return prev;
+        if (prev.length === 0) {
+          return [
+            {
+              id: 'ledger',
+              userId: currentUser?.id,
+              allowNegativeBalance: false,
+              defaultSavingsAccountId: destination.id,
+              updatedAt: stamp,
+            },
+          ];
+        }
+        return prev.map((settingsRecord, index) =>
+          index === 0
+            ? { ...settingsRecord, defaultSavingsAccountId: destination.id, updatedAt: stamp }
+            : settingsRecord
+        );
+      });
+    }
     return true;
   };
 
@@ -1743,7 +2149,9 @@ export default function App() {
   };
 
   const handleQuickAdd = () => {
-    if (activeTab === 'today' || activeTab === 'finance') {
+    if (activeTab === 'diary') {
+      openDiaryComposer(selectedDate);
+    } else if (activeTab === 'today' || activeTab === 'finance') {
       openFinanceModal(null);
     } else {
       setEditingTask(null);
@@ -1996,8 +2404,31 @@ export default function App() {
   };
 
   // ===== Savings handlers =====
+  const closeSavingsModal = () => {
+    setIsSavingsModalOpen(false);
+    setEditingSavingsEntry(null);
+    setEditingSavingsTransfer(null);
+    setSavingsPresetAmount(null);
+  };
+
   const openSavingsModal = (entry?: SavingsEntry | null) => {
     setEditingSavingsEntry(entry || null);
+    setEditingSavingsTransfer(null);
+    setSavingsPresetAmount(null);
+    setIsSavingsModalOpen(true);
+  };
+
+  const openSavingsTransferModal = (tx: FinanceTransaction) => {
+    setEditingSavingsEntry(null);
+    setEditingSavingsTransfer(tx);
+    setSavingsPresetAmount(null);
+    setIsSavingsModalOpen(true);
+  };
+
+  const openSavingsModalWithAmount = (amount: number) => {
+    setEditingSavingsEntry(null);
+    setEditingSavingsTransfer(null);
+    setSavingsPresetAmount(amount);
     setIsSavingsModalOpen(true);
   };
 
@@ -2037,18 +2468,21 @@ export default function App() {
   };
 
   const handleQuickAddSavings = (amount: number) => {
-    const today = new Date().toISOString().split('T')[0];
-    const now = new Date().toISOString();
-    const newEntry: SavingsEntry = {
-      id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      userId: currentUser?.id,
-      date: today,
+    const settingsRecord = ledgerSettings[0];
+    const fromAccountId = resolveDefaultAccountId(accounts, settingsRecord);
+    const toAccountId = resolveSavingsDestinationId(accounts, settingsRecord?.defaultSavingsAccountId);
+    if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) {
+      openSavingsModalWithAmount(amount);
+      return;
+    }
+    handleSaveTransfer({
       amount,
+      fromAccountId,
+      toAccountId,
+      date: todayString(),
+      time: nowTimeString(),
       note: 'Quick add',
-      createdAt: now,
-      updatedAt: now,
-    };
-    setSavingsEntries((prev) => [newEntry, ...prev]);
+    });
   };
 
   // Budget alert effect: check thresholds when transactions/budgets change.
@@ -2181,6 +2615,17 @@ export default function App() {
 
       <InstallPrompt />
 
+      {ringing && !isNative() && (
+        <AlarmRingOverlay
+          title={ringing.title}
+          body={ringing.body}
+          sound={ringing.sound}
+          snoozeMinutes={ringing.snoozeMinutes}
+          onDismiss={() => finishRing('dismiss')}
+          onSnooze={() => finishRing('snooze')}
+        />
+      )}
+
       {/* Triggered Alarm / Notification Banner */}
       <NotificationBanner
         permissionStatus={permissionStatus}
@@ -2208,6 +2653,7 @@ export default function App() {
         {/* TODAY VIEW */}
         {activeTab === 'today' && (
           <div className="space-y-5">
+            <TodayAlarmCard alarms={alarms} onOpen={() => setActiveTab('alarms')} />
             <TodayHabitsCard
               date={selectedDate}
               goals={goals}
@@ -2217,6 +2663,11 @@ export default function App() {
               onEditHabit={setEditingHabit}
               onDeleteHabit={handleDeleteHabit}
               onOpenHabits={() => setActiveTab('habits')}
+            />
+            <TodayDiaryCard
+              date={selectedDate}
+              entries={diaryEntries}
+              onOpen={() => setActiveTab('diary')}
             />
             {/* Search, Filter & Sort Controls */}
             <Card className="p-3 space-y-2.5">
@@ -2457,6 +2908,7 @@ export default function App() {
             habits={habits}
             checkIns={habitCheckIns}
             transactions={transactions}
+            diaryEntries={diaryEntries}
             onToggleTask={handleToggleComplete}
             onEditTask={(task) => {
               setEditingTask(task);
@@ -2468,6 +2920,8 @@ export default function App() {
               setIsTaskModalOpen(true);
             }}
             onAddFinance={(type) => openFinanceModal(null, { type })}
+            onAddNote={() => openDiaryComposer(selectedDate)}
+            onEditNote={(entry) => openDiaryComposer(entry.date, entry)}
           />
         )}
 
@@ -2506,6 +2960,7 @@ export default function App() {
             onSaveHabit={handleSaveHabit}
             onLinkHabit={handleLinkHabit}
             onRegisterClose={registerGoalClose}
+            localMusicName={settings.localMusicName}
           />
         )}
 
@@ -2519,6 +2974,33 @@ export default function App() {
             onDeleteHabit={handleDeleteHabit}
             onOpenGoals={() => setActiveTab('goals')}
             onRegisterClose={registerHabitClose}
+            localMusicName={settings.localMusicName}
+          />
+        )}
+
+        {activeTab === 'alarms' && (
+          <AlarmsView
+            alarms={alarms}
+            localMusicName={settings.localMusicName}
+            onSave={handleSaveAlarm}
+            onDelete={handleDeleteAlarm}
+            onToggle={(id, enabled) =>
+              setAlarms((prev) =>
+                prev.map((alarm) =>
+                  alarm.id === id ? { ...alarm, enabled, updatedAt: new Date().toISOString() } : alarm
+                )
+              )
+            }
+          />
+        )}
+
+        {activeTab === 'diary' && (
+          <DiaryView
+            entries={diaryEntries}
+            selectedDate={selectedDate}
+            onAdd={() => openDiaryComposer(selectedDate)}
+            onEdit={(entry) => openDiaryComposer(entry.date, entry)}
+            onDelete={handleDeleteDiaryEntry}
           />
         )}
 
@@ -2595,6 +3077,7 @@ export default function App() {
             savingsStreak={savingsStreak}
             onAddSavings={() => openSavingsModal(null)}
             onEditSavings={(entry) => openSavingsModal(entry)}
+            onEditSavingsTransfer={openSavingsTransferModal}
             onDeleteSavings={handleDeleteSavingsEntry}
             onQuickAddSavings={handleQuickAddSavings}
             onDismissAlert={handleDismissAlert}
@@ -2618,6 +3101,17 @@ export default function App() {
         onOpenProfile={() => setIsAuthModalOpen(true)}
       />
 
+      <DiaryEntryModal
+        isOpen={isDiaryModalOpen}
+        onClose={() => {
+          setIsDiaryModalOpen(false);
+          setEditingDiaryEntry(null);
+        }}
+        onSave={handleSaveDiaryEntry}
+        initialEntry={editingDiaryEntry}
+        defaultDate={diaryDraftDate}
+      />
+
       {/* Add / Edit Task Modal */}
       <TaskModal
         isOpen={isTaskModalOpen}
@@ -2629,6 +3123,7 @@ export default function App() {
         initialTask={editingTask}
         categories={categories}
         selectedDate={selectedDate}
+        localMusicName={settings.localMusicName}
       />
 
       {/* Add / Edit Finance Transaction Modal */}
@@ -2707,15 +3202,18 @@ export default function App() {
         accounts={accounts}
       />
 
-      {/* Add / Edit Savings Entry Modal */}
+      {/* Add / Edit Savings — a transfer into savings, gold, or stocks */}
       <SavingsModal
         isOpen={isSavingsModalOpen}
-        onClose={() => {
-          setIsSavingsModalOpen(false);
-          setEditingSavingsEntry(null);
-        }}
-        onSave={handleSaveSavingsEntry}
-        initialEntry={editingSavingsEntry}
+        onClose={closeSavingsModal}
+        onSaveTransfer={handleSaveTransfer}
+        onSaveLegacy={handleSaveSavingsEntry}
+        initialTransfer={editingSavingsTransfer}
+        initialLegacy={editingSavingsEntry}
+        presetAmount={savingsPresetAmount}
+        accounts={accounts}
+        transactions={transactions}
+        ledgerSettings={ledgerSettings}
         selectedDate={selectedDate}
       />
 
@@ -2728,6 +3226,7 @@ export default function App() {
         }}
         initialHabit={editingHabit}
         goals={goals}
+        localMusicName={settings.localMusicName}
       />
 
       {/* Settings Modal */}
@@ -2758,6 +3257,14 @@ export default function App() {
         currentUser={currentUser}
         onUserChanged={(user) => setCurrentUser(user)}
       />
+
+      {recentlyDeletedDiary && (
+        <Toast
+          message={`Note "${diaryPreview(recentlyDeletedDiary.entry.body, 40)}" deleted`}
+          onUndo={handleUndoDeleteDiary}
+          onDismiss={() => setRecentlyDeletedDiary(null)}
+        />
+      )}
 
       {/* Undo Toast for recently deleted tasks */}
       {recentlyDeleted && (

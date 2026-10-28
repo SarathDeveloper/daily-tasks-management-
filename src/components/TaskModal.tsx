@@ -6,7 +6,6 @@ import {
   Tag,
   Repeat,
   Bell,
-  Volume2,
   Plus,
   Trash2,
   AlertTriangle,
@@ -14,6 +13,8 @@ import {
 } from 'lucide-react';
 import { Task, Priority, RecurrenceType, SoundType, Category, Subtask } from '../types';
 import { audioService } from '../services/audioService';
+import { previewLocalMusic } from '../lib/localMusic';
+import { SoundFields } from './SoundFields';
 
 interface TaskModalProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ interface TaskModalProps {
   initialTask?: Task | null;
   categories: Category[];
   selectedDate: string;
+  localMusicName?: string;
 }
 
 export const TaskModal: React.FC<TaskModalProps> = ({
@@ -31,6 +33,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   initialTask,
   categories,
   selectedDate,
+  localMusicName,
 }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -44,6 +47,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   const [reminderEnabled, setReminderEnabled] = useState(true);
   const [remindBeforeMinutes, setRemindBeforeMinutes] = useState(5);
   const [sound, setSound] = useState<SoundType>('chime');
+  const [ringAlarm, setRingAlarm] = useState(false);
   const [subtasks, setSubtasks] = useState<{ id: string; title: string; completed: boolean }[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [tags, setTags] = useState<string[]>([]);
@@ -63,6 +67,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setReminderEnabled(initialTask.reminder?.enabled ?? true);
       setRemindBeforeMinutes(initialTask.reminder?.remindBeforeMinutes ?? 5);
       setSound(initialTask.reminder?.sound || 'chime');
+      setRingAlarm(Boolean(initialTask.reminder?.alarm));
       setSubtasks(initialTask.subtasks || []);
       setTags(initialTask.tags || []);
     } else {
@@ -78,6 +83,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setReminderEnabled(true);
       setRemindBeforeMinutes(5);
       setSound('chime');
+      setRingAlarm(false);
       setSubtasks([]);
       setTags([]);
     }
@@ -111,6 +117,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   };
 
   const handlePreviewSound = () => {
+    if (sound === 'music') {
+      void previewLocalMusic().then((played) => {
+        if (!played) audioService.playSound('chime', title || 'Sample Task');
+      });
+      return;
+    }
     audioService.playSound(sound, title || 'Sample Task');
   };
 
@@ -136,6 +148,9 @@ export const TaskModal: React.FC<TaskModalProps> = ({
         enabled: reminderEnabled,
         remindBeforeMinutes,
         sound,
+        alarm: ringAlarm || undefined,
+        lastNotifiedAt: initialTask?.reminder?.lastNotifiedAt,
+        snoozedUntil: initialTask?.reminder?.snoozedUntil,
       },
       tags,
     });
@@ -383,31 +398,14 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                 </div>
 
                 {/* Sound Chime Style */}
-                <div>
-                  <label className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1">Chime Sound</label>
-                  <div className="flex items-center gap-1.5">
-                    <select
-                      value={sound}
-                      onChange={(e) => setSound(e.target.value as SoundType)}
-                      className="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-200 capitalize"
-                    >
-                      <option value="chime">🔔 Gentle Chime</option>
-                      <option value="bell">🛎️ Harmonic Bell</option>
-                      <option value="digital">📱 Digital Pulse</option>
-                      <option value="gentle">🎶 Soothing Chord</option>
-                      <option value="voice">🗣️ Voice Announcement</option>
-                    </select>
-
-                    <button
-                      type="button"
-                      onClick={handlePreviewSound}
-                      title="Preview Chime Sound"
-                      className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900 border border-indigo-200 dark:border-indigo-700/60"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
+                <SoundFields
+                  sound={sound}
+                  onSound={setSound}
+                  ring={ringAlarm}
+                  onRing={setRingAlarm}
+                  localMusicName={localMusicName}
+                  onPreview={handlePreviewSound}
+                />
               </div>
             )}
           </div>

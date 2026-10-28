@@ -1,7 +1,10 @@
-import React from 'react';
-import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette, Clock, AlertTriangle } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette, Clock, AlertTriangle, Music } from 'lucide-react';
 import { NotificationSettings, SoundType } from '../types';
 import { audioService } from '../services/audioService';
+import { clearLocalMusicFile, previewLocalMusic, saveLocalMusicFile } from '../lib/localMusic';
+import { isNativeAndroid } from '../lib/platform';
+import { DayflowAlarm } from '../services/dayflowAlarm';
 import { CloudSyncSection } from './CloudSyncSection';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
 import type { ReminderReliabilityState } from './ReminderReliabilityCard';
@@ -39,10 +42,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   nextReminder,
   onRequestExactAlarm,
 }) => {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [songError, setSongError] = useState('');
+
   if (!isOpen) return null;
 
   const handleTestSound = (sound: SoundType) => {
     audioService.playSound(sound, 'Daily task reminder test');
+  };
+
+  const chooseSong = async () => {
+    setSongError('');
+    try {
+      if (isNativeAndroid()) {
+        const picked = await DayflowAlarm.pickMusic();
+        onUpdateSettings({ ...settings, localMusicName: picked.name });
+        return;
+      }
+      fileRef.current?.click();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '';
+      if (message.includes('too-large')) setSongError('Choose a song under 15 MB.');
+      else if (!message.toLowerCase().includes('cancel')) setSongError('Could not use that song.');
+    }
+  };
+
+  const onSongFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setSongError('');
+    try {
+      const name = await saveLocalMusicFile(file);
+      onUpdateSettings({ ...settings, localMusicName: name });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '';
+      setSongError(message === 'too-large' ? 'Choose a song under 15 MB.' : 'Could not use that song.');
+    }
+  };
+
+  const removeSong = async () => {
+    setSongError('');
+    try {
+      await clearLocalMusicFile();
+      onUpdateSettings({ ...settings, localMusicName: undefined });
+    } catch {
+      setSongError('Could not remove the song.');
+    }
   };
 
   return (
@@ -157,6 +203,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span>Test</span>
                 </button>
               </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+              <div className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300">
+                <Music className="w-3.5 h-3.5 text-indigo-500" />
+                <span>Local music</span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                One song for any reminder or alarm set to Local music. The file stays on this device and is not backed up.
+              </p>
+              <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-200 truncate">
+                {settings.localMusicName || 'No song chosen'}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void chooseSong()}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 font-semibold"
+                >
+                  Choose song
+                </button>
+                <button
+                  type="button"
+                  disabled={!settings.localMusicName}
+                  onClick={() => void previewLocalMusic()}
+                  className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-semibold disabled:opacity-50"
+                >
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  disabled={!settings.localMusicName}
+                  onClick={() => void removeSong()}
+                  className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 text-rose-600 border border-slate-200 dark:border-slate-700 font-semibold disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              </div>
+              {songError && <p className="text-[11px] text-rose-600">{songError}</p>}
+              <input ref={fileRef} type="file" accept="audio/*" className="hidden" onChange={(event) => void onSongFile(event)} />
             </div>
           </div>
 

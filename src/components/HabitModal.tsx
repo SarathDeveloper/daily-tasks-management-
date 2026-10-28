@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, Minus, Plus, Repeat, Volume2, X } from 'lucide-react';
+import { Bell, Minus, Plus, Repeat, X } from 'lucide-react';
 import type { Goal, Habit, HabitColor, HabitScheduleType, SoundType } from '../types';
 import { audioService } from '../services/audioService';
+import { previewLocalMusic } from '../lib/localMusic';
 import { HABIT_COLOR_IDS, habitColor } from '../lib/habitStyle';
+import { SoundFields } from './SoundFields';
 import { HABIT_ICON_IDS, HabitIcon } from './HabitIcon';
 import { Button } from './ui/Button';
 
@@ -13,6 +15,7 @@ interface HabitModalProps {
   initialHabit?: Habit | null;
   goals: Goal[];
   defaultGoalId?: string;
+  localMusicName?: string;
 }
 
 const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -24,14 +27,6 @@ const SCHEDULES: { id: HabitScheduleType; label: string }[] = [
   { id: 'times_per_week', label: 'Times / week' },
 ];
 
-const SOUNDS: { id: SoundType; label: string }[] = [
-  { id: 'chime', label: 'Gentle Chime' },
-  { id: 'bell', label: 'Harmonic Bell' },
-  { id: 'digital', label: 'Digital Pulse' },
-  { id: 'gentle', label: 'Soothing Chord' },
-  { id: 'voice', label: 'Voice' },
-];
-
 export const HabitModal: React.FC<HabitModalProps> = ({
   isOpen,
   onClose,
@@ -39,6 +34,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
   initialHabit,
   goals,
   defaultGoalId,
+  localMusicName,
 }) => {
   const [title, setTitle] = useState('');
   const [scheduleType, setScheduleType] = useState<HabitScheduleType>('daily');
@@ -53,6 +49,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
   const [reminderEnabled, setReminderEnabled] = useState(false);
   const [reminderTime, setReminderTime] = useState('08:00');
   const [sound, setSound] = useState<SoundType>('chime');
+  const [ringAlarm, setRingAlarm] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -70,6 +67,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
       setReminderEnabled(initialHabit.reminder?.enabled ?? false);
       setReminderTime(initialHabit.reminder?.time || '08:00');
       setSound(initialHabit.reminder?.sound || 'chime');
+      setRingAlarm(Boolean(initialHabit.reminder?.alarm));
     } else {
       setTitle('');
       setScheduleType('daily');
@@ -84,6 +82,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
       setReminderEnabled(false);
       setReminderTime('08:00');
       setSound('chime');
+      setRingAlarm(false);
     }
   }, [defaultGoalId, initialHabit, isOpen]);
 
@@ -120,7 +119,9 @@ export const HabitModal: React.FC<HabitModalProps> = ({
             enabled: true,
             time: reminderTime || '08:00',
             sound,
+            alarm: ringAlarm || undefined,
             lastNotifiedAt: initialHabit?.reminder?.lastNotifiedAt,
+            snoozedUntil: initialHabit?.reminder?.snoozedUntil,
           }
         : undefined,
     });
@@ -334,29 +335,23 @@ export const HabitModal: React.FC<HabitModalProps> = ({
                     className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-200"
                   />
                 </div>
-                <div>
-                  <label className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1">Sound</label>
-                  <div className="flex items-center gap-1.5">
-                    <select
-                      value={sound}
-                      onChange={(event) => setSound(event.target.value as SoundType)}
-                      className="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-200"
-                    >
-                      {SOUNDS.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      title="Preview sound"
-                      onClick={() => audioService.playSound(sound, title || 'Habit reminder')}
-                      className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700/60"
-                    >
-                      <Volume2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                <div className="sm:col-span-2">
+                  <SoundFields
+                    sound={sound}
+                    onSound={setSound}
+                    ring={ringAlarm}
+                    onRing={setRingAlarm}
+                    localMusicName={localMusicName}
+                    onPreview={() => {
+                      if (sound === 'music') {
+                        void previewLocalMusic().then((played) => {
+                          if (!played) audioService.playSound('chime', title || 'Habit reminder');
+                        });
+                        return;
+                      }
+                      audioService.playSound(sound, title || 'Habit reminder');
+                    }}
+                  />
                 </div>
               </div>
             )}

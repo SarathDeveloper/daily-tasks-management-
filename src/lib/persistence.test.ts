@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Account, FinanceTransaction, Goal, Habit, HabitCheckIn, LedgerSettings } from '../types';
+import type { Account, DiaryEntry, FinanceTransaction, Goal, Habit, HabitCheckIn, LedgerSettings } from '../types';
 import {
   DATA_SCHEMA_VERSION,
   DEFAULT_SETTINGS,
@@ -330,5 +330,64 @@ describe('sync envelopes', () => {
     expect(merged.data.habits).toHaveLength(1);
     expect(merged.data.habitCheckIns).toEqual([]);
     expect(isEnvelopeEmpty(envelope({ habits: local.data.habits }))).toBe(false);
+  });
+
+  it('round-trips diary entries', () => {
+    const keys = getStorageKeys('user-1');
+    const saved: DiaryEntry = {
+      id: 'diary-1',
+      date: '2026-10-02',
+      time: '21:10',
+      mood: 'good',
+      body: 'Walked after dinner.',
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+    writeSnapshot(keys, { ...emptyData(), diaryEntries: [saved] });
+    const loaded = readSnapshot(keys);
+    expect(loaded.diaryEntries).toEqual([saved]);
+    expect(countRecords(loaded)).toBe(1);
+    expect(getStorageKeys(null).diaryEntries).toBe('daily_diary_entries_v1');
+    expect(keys.diaryEntries).toBe('daily_diary_entries_user-1');
+  });
+
+  it('merges a backup that omits diary entries without dropping local notes', () => {
+    const note: DiaryEntry = {
+      id: 'diary-1',
+      date: '2026-10-02',
+      time: '08:00',
+      mood: 'okay',
+      body: 'Local note',
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+    const local = envelope({ diaryEntries: [note] });
+    const remote = envelope({}, { schemaVersion: 2, deviceId: 'device-b' });
+    const legacyData = { ...remote.data } as Partial<SyncData>;
+    delete legacyData.diaryEntries;
+
+    const merged = mergeEnvelopes(local, { ...remote, data: legacyData as SyncData });
+    expect(merged.data.diaryEntries).toEqual([note]);
+    expect(isEnvelopeEmpty(envelope({ diaryEntries: [note] }))).toBe(false);
+    expect(isValidEnvelope(envelope({}))).toBe(true);
+    expect(isValidEnvelope(envelope({ diaryEntries: 'nope' as unknown as DiaryEntry[] }))).toBe(false);
+  });
+
+  it('keeps the newer diary note when both devices edited it', () => {
+    const older: DiaryEntry = {
+      id: 'diary-1',
+      date: '2026-10-02',
+      time: '08:00',
+      mood: 'low',
+      body: 'First draft',
+      createdAt: STAMP,
+      updatedAt: STAMP,
+    };
+    const newer: DiaryEntry = { ...older, body: 'Revised', mood: 'good', updatedAt: '2026-10-03T00:00:00.000Z' };
+    const merged = mergeEnvelopes(
+      envelope({ diaryEntries: [older] }),
+      envelope({ diaryEntries: [newer] }, { deviceId: 'device-b' })
+    );
+    expect(merged.data.diaryEntries?.[0].body).toBe('Revised');
   });
 });

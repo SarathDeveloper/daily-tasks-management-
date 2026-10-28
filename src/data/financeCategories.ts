@@ -56,6 +56,8 @@ export const ACCOUNT_TYPES: { value: AccountType; label: string; emoji: string }
   { value: 'cash', label: 'Cash Wallet', emoji: '💵' },
   { value: 'savings', label: 'Savings Bank', emoji: '🏦' },
   { value: 'current', label: 'Current Bank', emoji: '🏛️' },
+  { value: 'gold', label: 'Gold', emoji: '🪙' },
+  { value: 'stocks', label: 'Stocks', emoji: '📈' },
   { value: 'other', label: 'Other', emoji: '💼' },
 ];
 

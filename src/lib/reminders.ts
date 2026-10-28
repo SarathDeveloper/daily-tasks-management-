@@ -14,11 +14,13 @@ import {
   isComplete,
   isScheduledOn,
   isSkipped,
+  localDateString,
   quotaForWeek,
   todayDateString,
   weekDates,
   weekStartMonday,
 } from './habits';
+import { resolveReminderDelivery } from './sounds';
 
 /** Do not schedule further out than this; keeps the alarm list small. */
 export const MAX_SCHEDULE_HORIZON_DAYS = 60;
@@ -35,6 +37,10 @@ export interface ReminderPlan {
   body: string;
   /** The task's own chime choice; drives the Android notification channel. */
   sound: SoundType;
+  /** Loop on the alarm bridge instead of a one-shot notification. */
+  ring: boolean;
+  /** Task id, or `habit:{id}:{date}` for a habit day. */
+  occurrenceId: string;
   /** Set when this plan belongs to a habit rather than a task. */
   habitId?: string;
 }
@@ -91,7 +97,8 @@ export function buildReminderPlans(
   now: Date = new Date(),
   habits: Habit[] = [],
   checkIns: HabitCheckIn[] = [],
-  goals: Goal[] = []
+  goals: Goal[] = [],
+  hasMusic = Boolean(settings.localMusicName)
 ): ReminderPlan[] {
   const nowMs = now.getTime();
   const horizonMs = nowMs + MAX_SCHEDULE_HORIZON_DAYS * 24 * 60 * 60 * 1000;
@@ -125,17 +132,25 @@ export function buildReminderPlans(
     const fireAt = new Date(fireMs);
     if (isQuietHours(settings, fireAt)) continue;
 
+    const delivery = resolveReminderDelivery(
+      task.reminder.sound,
+      task.reminder.alarm,
+      hasMusic,
+      settings.defaultSound
+    );
     plans.push({
       taskId: task.id,
       notificationId: reserveNotificationId(hashNotificationId(task.id), usedIds),
       fireAt,
       title: task.title,
       body: task.time ? `${task.time} · ${task.category}` : task.category,
-      sound: task.reminder.sound ?? settings.defaultSound,
+      sound: delivery.sound,
+      ring: delivery.ring,
+      occurrenceId: task.id,
     });
   }
 
-  appendHabitPlans(plans, usedIds, habits, checkIns, goals, settings, nowMs, horizonMs);
+  appendHabitPlans(plans, usedIds, habits, checkIns, goals, settings, nowMs, horizonMs, hasMusic);
 
   plans.sort((a, b) => a.fireAt.getTime() - b.fireAt.getTime());
   return plans.slice(0, MAX_SCHEDULED_REMINDERS);
@@ -149,12 +164,18 @@ function appendHabitPlans(
   goals: Goal[],
   settings: NotificationSettings,
   nowMs: number,
-  horizonMs: number
+  horizonMs: number,
+  hasMusic: boolean
 ): void {
   const today = todayDateString(new Date(nowMs));
   for (const habit of habits) {
     if (!habit.reminder?.enabled || !habit.reminder.time) continue;
     if (habitBlockReason(habit, goals)) continue;
+    const snoozedUntil = habit.reminder.snoozedUntil ? Date.parse(habit.reminder.snoozedUntil) : NaN;
+    const snoozeDay =
+      Number.isFinite(snoozedUntil) && snoozedUntil > nowMs
+        ? localDateString(new Date(snoozedUntil))
+        : '';
     const map = checkInMap(habit.id, checkIns);
     const plannedThisWeek = new Map<string, number>();
     let day = today;
@@ -173,22 +194,36 @@ function appendHabitPlans(
             allowed = quota > 0 && completes + planned < quota;
           }
           if (allowed) {
+            if (snoozeDay && day < snoozeDay) {
+              day = addDays(day, 1);
+              continue;
+            }
             const fireAt = parseTaskDateTime(day, habit.reminder.time);
-            const fireMs = fireAt?.getTime() ?? NaN;
+            let fireMs = fireAt?.getTime() ?? NaN;
+            if (fireAt && snoozeDay === day && snoozedUntil > fireMs) fireMs = snoozedUntil;
+            const adjusted = Number.isFinite(fireMs) ? new Date(fireMs) : null;
             if (
-              fireAt &&
+              adjusted &&
               fireMs >= nowMs + MIN_LEAD_MS &&
               fireMs <= horizonMs &&
-              !isQuietHours(settings, fireAt)
+              !isQuietHours(settings, adjusted)
             ) {
+              const delivery = resolveReminderDelivery(
+                habit.reminder.sound,
+                habit.reminder.alarm,
+                hasMusic,
+                settings.defaultSound
+              );
               plans.push({
                 taskId: `habit:${habit.id}`,
                 habitId: habit.id,
                 notificationId: reserveNotificationId(hashNotificationId(`habit:${habit.id}:${day}`), usedIds),
-                fireAt,
+                fireAt: adjusted,
                 title: habit.title,
                 body: `Habit · ${habit.reminder.time}`,
-                sound: habit.reminder.sound ?? settings.defaultSound,
+                sound: delivery.sound,
+                ring: delivery.ring,
+                occurrenceId: `habit:${habit.id}:${day}`,
               });
               if (habit.schedule.type === 'times_per_week' && monday) {
                 plannedThisWeek.set(monday, (plannedThisWeek.get(monday) ?? 0) + 1);

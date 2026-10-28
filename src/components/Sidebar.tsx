@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Clock, Zap, Folder, TrendingUp, Wallet, Plus, Target, Repeat, CalendarDays } from 'lucide-react';
+import { AlarmClock, BookOpen, Calendar, Clock, Zap, Folder, TrendingUp, Wallet, Plus, Target, Repeat, CalendarDays } from 'lucide-react';
 import { ActiveTab } from '../types';
 
 interface SidebarProps {
@@ -20,6 +20,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'focus', label: 'Focus', icon: Zap },
     { id: 'goals', label: 'Goals', icon: Target },
     { id: 'habits', label: 'Habits', icon: Repeat },
+    { id: 'alarms', label: 'Alarms', icon: AlarmClock },
+    { id: 'diary', label: 'Diary', icon: BookOpen },
     { id: 'categories', label: 'Categories', icon: Folder },
     { id: 'finance', label: 'Finance', icon: Wallet },
     { id: 'stats', label: 'Streak', icon: TrendingUp },
@@ -76,10 +78,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <button
         onClick={onOpenQuickAdd}
         className="mt-4 w-full shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-sm shadow-lg shadow-indigo-600/30 hover:opacity-90 active:scale-95 transition-all"
-        title={activeTab === 'today' || activeTab === 'finance' ? 'Add Expense or Income' : 'Quick Add Task'}
+        title={
+          activeTab === 'today' || activeTab === 'finance'
+            ? 'Add Expense or Income'
+            : activeTab === 'diary'
+              ? 'New note'
+              : 'Quick Add Task'
+        }
       >
         <Plus className="w-4 h-4" />
-        <span>{activeTab === 'today' || activeTab === 'finance' ? 'New Entry' : 'New Task'}</span>
+        <span>
+          {activeTab === 'today' || activeTab === 'finance'
+            ? 'New Entry'
+            : activeTab === 'diary'
+              ? 'New Note'
+              : 'New Task'}
+        </span>
       </button>
     </aside>
   );

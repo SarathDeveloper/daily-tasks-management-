@@ -8,12 +8,14 @@
  */
 import type {
   Account,
+  Alarm,
   BillPayment,
   BillTemplate,
   Category,
   CategoryBudget,
   Debt,
   FinanceTransaction,
+  DiaryEntry,
   Goal,
   Habit,
   HabitCheckIn,
@@ -39,6 +41,8 @@ export interface StorageKeys {
   goals: string;
   habits: string;
   habitCheckIns: string;
+  alarms: string;
+  diaryEntries: string;
   billTemplates: string;
   billPayments: string;
   alertState: string;
@@ -60,6 +64,8 @@ const GLOBAL_KEYS: StorageKeys = {
   goals: 'daily_goals_v1',
   habits: 'daily_habits_v1',
   habitCheckIns: 'daily_habit_checkins_v1',
+  alarms: 'daily_alarms_v1',
+  diaryEntries: 'daily_diary_entries_v1',
   billTemplates: 'daily_finance_bill_templates_v1',
   billPayments: 'daily_finance_bill_payments_v1',
   alertState: 'daily_finance_alert_state_v1',
@@ -88,6 +94,8 @@ export function getStorageKeys(userId?: string | null): StorageKeys {
     goals: `daily_goals_${userId}`,
     habits: `daily_habits_${userId}`,
     habitCheckIns: `daily_habit_checkins_${userId}`,
+    alarms: `daily_alarms_${userId}`,
+    diaryEntries: `daily_diary_entries_${userId}`,
     billTemplates: `daily_finance_bill_templates_${userId}`,
     billPayments: `daily_finance_bill_payments_${userId}`,
     alertState: `daily_finance_alert_state_${userId}`,
@@ -147,6 +155,8 @@ export interface SyncData {
   goals?: Goal[];
   habits?: Habit[];
   habitCheckIns?: HabitCheckIn[];
+  alarms?: Alarm[];
+  diaryEntries?: DiaryEntry[];
   billTemplates: BillTemplate[];
   billPayments: BillPayment[];
   settings: NotificationSettings;
@@ -181,6 +191,8 @@ export function readSnapshot(keys: StorageKeys): SyncData {
     goals: readJson<Goal[]>(keys.goals, []),
     habits: readJson<Habit[]>(keys.habits, []),
     habitCheckIns: readJson<HabitCheckIn[]>(keys.habitCheckIns, []),
+    alarms: readJson<Alarm[]>(keys.alarms, []),
+    diaryEntries: readJson<DiaryEntry[]>(keys.diaryEntries, []),
     billTemplates: readJson<BillTemplate[]>(keys.billTemplates, []),
     billPayments: readJson<BillPayment[]>(keys.billPayments, []),
     settings: {
@@ -204,6 +216,8 @@ export function writeSnapshot(keys: StorageKeys, data: SyncData): void {
   writeJson(keys.goals, data.goals ?? []);
   writeJson(keys.habits, data.habits ?? []);
   writeJson(keys.habitCheckIns, data.habitCheckIns ?? []);
+  writeJson(keys.alarms, data.alarms ?? []);
+  writeJson(keys.diaryEntries, data.diaryEntries ?? []);
   writeJson(keys.billTemplates, data.billTemplates);
   writeJson(keys.billPayments, data.billPayments);
   writeJson(keys.settings, data.settings);
@@ -224,6 +238,8 @@ export function countRecords(data: SyncData): number {
     (data.goals?.length ?? 0) +
     (data.habits?.length ?? 0) +
     (data.habitCheckIns?.length ?? 0) +
+    (data.alarms?.length ?? 0) +
+    (data.diaryEntries?.length ?? 0) +
     data.billTemplates.length +
     data.billPayments.length
   );

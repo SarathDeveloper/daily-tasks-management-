@@ -11,7 +11,7 @@ export interface User {
 
 export type RecurrenceType = 'none' | 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'custom';
 
-export type SoundType = 'chime' | 'bell' | 'digital' | 'gentle' | 'voice';
+export type SoundType = 'chime' | 'bell' | 'digital' | 'gentle' | 'voice' | 'music';
 
 export interface Subtask {
   id: string;
@@ -23,6 +23,8 @@ export interface TaskReminder {
   enabled: boolean;
   remindBeforeMinutes: number; // 0 = at time, 5, 15, 30, 60
   sound: SoundType;
+  /** Loop until Dismiss or Snooze. Local music always rings this way. */
+  alarm?: boolean;
   lastNotifiedAt?: string;
   snoozedUntil?: string;
 }
@@ -68,6 +70,8 @@ export interface NotificationSettings {
   soundEnabled: boolean;
   speechEnabled: boolean;
   defaultSound: SoundType;
+  /** Display name of the device-local song. The file itself is not synced. */
+  localMusicName?: string;
   quietHours: {
     enabled: boolean;
     start: string; // "22:00"
@@ -75,7 +79,7 @@ export interface NotificationSettings {
   };
 }
 
-export type ActiveTab = 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'categories' | 'stats' | 'finance' | 'settings';
+export type ActiveTab = 'today' | 'calendar' | 'timeline' | 'focus' | 'goals' | 'habits' | 'alarms' | 'diary' | 'categories' | 'stats' | 'finance' | 'settings';
 
 export type GoalStatus = 'active' | 'paused' | 'completed';
 
@@ -107,7 +111,28 @@ export interface HabitReminder {
   enabled: boolean;
   time: string; // HH:mm
   sound: SoundType;
+  /** Loop until Dismiss or Snooze. Local music always rings this way. */
+  alarm?: boolean;
   lastNotifiedAt?: string;
+  snoozedUntil?: string;
+}
+
+/** A clock alarm. Empty `daysOfWeek` rings once, then turns off after dismiss. */
+export interface Alarm {
+  id: string;
+  userId?: string;
+  label: string;
+  time: string; // HH:mm
+  enabled: boolean;
+  /** 0 = Sunday … 6 = Saturday. Empty means once. */
+  daysOfWeek: number[];
+  sound: SoundType;
+  snoozeMinutes: number;
+  snoozedUntil?: string;
+  /** Set when this occurrence was dismissed so it does not ring again in the same window. */
+  acknowledgedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Habit {
@@ -150,11 +175,25 @@ export interface HabitCheckInPatch {
   value?: number;
 }
 
+export type DiaryMood = 'great' | 'good' | 'okay' | 'low' | 'rough';
+
+/** One note. A calendar day can hold many of these. */
+export interface DiaryEntry {
+  id: string;
+  userId?: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  mood: DiaryMood;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // Money ledger: accounts
 // ---------------------------------------------------------------------------
 
-export type AccountType = 'cash' | 'savings' | 'current' | 'other';
+export type AccountType = 'cash' | 'savings' | 'current' | 'gold' | 'stocks' | 'other';
 
 export interface Account {
   id: string;
@@ -181,6 +220,8 @@ export interface LedgerSettings {
   userId?: string;
   allowNegativeBalance: boolean;
   defaultAccountId?: string;
+  /** Last savings, gold, or stocks account a save was moved into. */
+  defaultSavingsAccountId?: string;
   updatedAt: string;
 }
 

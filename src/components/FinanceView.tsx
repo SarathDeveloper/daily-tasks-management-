@@ -40,8 +40,11 @@ import {
   EXPENSE_CATEGORIES,
   QUICK_ADD_AMOUNTS,
   QUICK_ADD_FALLBACK_CATEGORIES,
+  accountTypeMeta,
 } from '../data/financeCategories';
 import { recentExpenseCategories } from '../lib/financeRecurrence';
+import { formatPaise } from '../lib/money';
+import { computeAccountBalances, todayString } from '../lib/ledger';
 import {
   getDailySpendForMonth,
   getLast7DaysData,
@@ -50,12 +53,12 @@ import {
   getSavingsProgress,
 } from '../lib/financeInsights';
 import {
-  calculateStreak,
   getLastNDaysHeatmap,
   getMonthlySavingsTotal,
   getMonthlySavedDays,
   heatmapIntensity,
 } from '../lib/savingsStreak';
+import { bucketAccounts, countedSavingsAmounts, savingsRowsForMonth } from '../lib/savingsLedger';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Dropdown } from './ui/Dropdown';
@@ -95,6 +98,7 @@ interface FinanceViewProps {
   onUpdateBillPaymentAmount: (payment: BillPayment, amount: number) => void;
   onAddSavings: () => void;
   onEditSavings: (entry: SavingsEntry) => void;
+  onEditSavingsTransfer: (tx: FinanceTransaction) => void;
   onDeleteSavings: (id: string) => void;
   onQuickAddSavings: (amount: number) => void;
   onDismissAlert: (key: string) => void;
@@ -173,6 +177,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   onUpdateBillPaymentAmount,
   onAddSavings,
   onEditSavings,
+  onEditSavingsTransfer,
   onDeleteSavings,
   onQuickAddSavings,
   onDismissAlert,
@@ -421,37 +426,45 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     setPaymentAmountInput('');
   };
 
-  // Savings
-  const currentSavingsMonth = toMonthKey(selectedDate);
+  // Savings: new money into savings, gold, or stocks, plus older unlinked logs.
+  const savingsToday = todayString();
+  const countedSavings = useMemo(
+    () => countedSavingsAmounts(savingsEntries, transactions, ledger.accounts),
+    [savingsEntries, transactions, ledger.accounts]
+  );
   const savingsHeatmap = useMemo(
-    () => getLastNDaysHeatmap(savingsEntries, 30),
-    [savingsEntries]
+    () => getLastNDaysHeatmap(countedSavings, 30),
+    [countedSavings]
   );
   const heatmapMax = useMemo(
     () => savingsHeatmap.reduce((m, d) => Math.max(m, d.amount), 0),
     [savingsHeatmap]
   );
   const monthSavingsTotal = useMemo(
-    () => getMonthlySavingsTotal(savingsEntries, currentSavingsMonth),
-    [savingsEntries, currentSavingsMonth]
+    () => getMonthlySavingsTotal(countedSavings, selectedMonth),
+    [countedSavings, selectedMonth]
   );
   const monthSavedDays = useMemo(
-    () => getMonthlySavedDays(savingsEntries, currentSavingsMonth),
-    [savingsEntries, currentSavingsMonth]
+    () => getMonthlySavedDays(countedSavings, selectedMonth),
+    [countedSavings, selectedMonth]
   );
   const monthSavingsList = useMemo(
-    () =>
-      savingsEntries
-        .filter((e) => e.date.startsWith(currentSavingsMonth))
-        .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)),
-    [savingsEntries, currentSavingsMonth]
+    () => savingsRowsForMonth(savingsEntries, transactions, ledger.accounts, selectedMonth),
+    [savingsEntries, transactions, ledger.accounts, selectedMonth]
   );
+  const bucketBalances = useMemo(() => {
+    const balances = computeAccountBalances(ledger.accounts, transactions);
+    return bucketAccounts(ledger.accounts).map((account) => ({
+      account,
+      paise: balances.get(account.id) || 0,
+    }));
+  }, [ledger.accounts, transactions]);
   const daysInMonth = new Date(
-    parseInt(currentSavingsMonth.slice(0, 4)),
-    parseInt(currentSavingsMonth.slice(5, 7)),
+    parseInt(selectedMonth.slice(0, 4)),
+    parseInt(selectedMonth.slice(5, 7)),
     0
   ).getDate();
-  const savedToday = savingsEntries.some((e) => e.date === todayStr && e.amount > 0);
+  const savedToday = countedSavings.some((entry) => entry.date === savingsToday && entry.amount > 0);
   const currentStreak = savingsStreak.currentStreak;
   const longestStreak = savingsStreak.longestStreak;
   const SAVINGS_QUICK_AMOUNTS = [50, 100, 200, 500];
@@ -565,7 +578,10 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             </span>
           </button>
           <button
-            onClick={() => setMode('savings')}
+            onClick={() => {
+              setMode('savings');
+              setSelectedMonth(toMonthKey(selectedDate));
+            }}
             className={`px-3 py-2 rounded-lg text-xs font-bold transition-colors ${
               mode === 'savings'
                 ? 'bg-white dark:bg-slate-700 text-emerald-700 dark:text-emerald-300 shadow-sm'
@@ -1767,7 +1783,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                 <span>Savings Habit</span>
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Log a small saving each day to build a streak. Consistency beats amount.
+                Move money into savings, gold, or stocks. A day counts when new money lands there.
               </p>
             </div>
             <Button variant="primary" size="sm" onClick={onAddSavings}>
@@ -1792,7 +1808,9 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               </div>
               <div className="text-right">
                 <p className="text-xs text-slate-500 dark:text-slate-400">Longest</p>
-                <p className="text-lg font-bold text-slate-900 dark:text-white">{longestStreak} days</p>
+                <p className="text-lg font-bold text-slate-900 dark:text-white">
+                  {longestStreak} {longestStreak === 1 ? 'day' : 'days'}
+                </p>
                 {savingsStreak.lastSavedDate && (
                   <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
                     Last saved {new Date(savingsStreak.lastSavedDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
@@ -1814,6 +1832,31 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               )}
             </div>
           </Card>
+
+          {bucketBalances.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {bucketBalances.map(({ account, paise }) => {
+                const meta = accountTypeMeta(account.type);
+                return (
+                  <Card key={account.id} className="p-3 sm:p-4">
+                    <div className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 truncate">
+                      {meta.emoji} {meta.label}
+                    </div>
+                    <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{account.name}</p>
+                    <p className="text-base sm:text-lg font-black text-emerald-700 dark:text-emerald-400 truncate">
+                      {formatPaise(paise)}
+                    </p>
+                  </Card>
+                );
+              })}
+            </div>
+          ) : (
+            <Card className="p-4">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Add a savings, gold, or stocks account in the ledger before logging a save. The balance is in rupees.
+              </p>
+            </Card>
+          )}
 
           {/* Quick-add chips */}
           <div>
@@ -1865,13 +1908,13 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   <div
                     key={d.date}
                     title={`${d.date}: ${d.saved ? formatMoney(d.amount) : 'No saving'}`}
-                    className={`aspect-square rounded ${bg} ${d.date === todayStr ? 'ring-2 ring-indigo-400' : ''}`}
+                    className={`aspect-square rounded ${bg} ${d.date === savingsToday ? 'ring-2 ring-indigo-400' : ''}`}
                   />
                 );
               })}
             </div>
             <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-2">
-              Today's square is highlighted with a ring.
+              Today's square is highlighted with a ring. Moving money between savings accounts does not fill a day.
             </p>
           </Card>
 
@@ -1906,29 +1949,28 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
           {/* Month navigator */}
           <Card className="p-3 flex items-center justify-between gap-2">
             <button
-              onClick={() => setSelectedMonth(shiftMonth(currentSavingsMonth, -1))}
+              onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))}
               className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               <ChevronLeft className="w-5 h-5" />
             </button>
             <div className="text-center flex-1">
               <p className="font-bold text-sm text-slate-900 dark:text-white">
-                {monthLabel(currentSavingsMonth)}
+                {monthLabel(selectedMonth)}
               </p>
             </div>
             <button
-              onClick={() => setSelectedMonth(shiftMonth(currentSavingsMonth, 1))}
+              onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))}
               className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               <ChevronRight className="w-5 h-5" />
             </button>
           </Card>
 
-          {/* Savings entries list for selected month */}
           {monthSavingsList.length > 0 ? (
             <div className="space-y-2">
               <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 px-1">
-                Savings in {monthLabel(currentSavingsMonth)}
+                Savings in {monthLabel(selectedMonth)}
               </h4>
               {monthSavingsList.map((entry) => (
                 <Card key={entry.id} className="p-3 flex items-center gap-3">
@@ -1938,22 +1980,41 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-slate-900 dark:text-white">
                       {formatMoney(entry.amount)}
+                      {entry.kind === 'reallocation' && (
+                        <span className="ml-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                          Moved
+                        </span>
+                      )}
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                       {new Date(entry.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      {entry.kind === 'legacy' ? (
+                        <span> · Not linked to an account</span>
+                      ) : (
+                        <span>
+                          {' '}
+                          · {entry.fromName} → {entry.toName}
+                        </span>
+                      )}
                       {entry.note && <span> · {entry.note}</span>}
                     </p>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
                     <button
-                      onClick={() => onEditSavings(entry)}
+                      onClick={() =>
+                        entry.kind === 'legacy'
+                          ? onEditSavings(entry.entry)
+                          : onEditSavingsTransfer(entry.transfer)
+                      }
                       className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                       title="Edit"
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => onDeleteSavings(entry.id)}
+                      onClick={() =>
+                        entry.kind === 'legacy' ? onDeleteSavings(entry.id) : onDeleteTransaction(entry.id)
+                      }
                       className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-slate-800"
                       title="Delete"
                     >
@@ -1967,10 +2028,10 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             <div className="text-center py-10 px-4 bg-white/80 dark:bg-slate-900/50 border border-dashed border-slate-300 dark:border-slate-800 rounded-2xl">
               <PiggyBank className="w-12 h-12 text-slate-400 dark:text-slate-600 mx-auto mb-3" />
               <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                No savings logged for {monthLabel(currentSavingsMonth)}
+                No savings logged for {monthLabel(selectedMonth)}
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-500 mt-1 max-w-xs mx-auto">
-                Start a habit today — even ₹50 counts and keeps your streak alive.
+                Move rupees into a savings, gold, or stocks account. Even ₹50 counts and keeps your streak alive.
               </p>
             </div>
           )}

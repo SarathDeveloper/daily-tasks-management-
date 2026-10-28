@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlarmClock,
+  BookOpen,
   Calendar,
   CalendarDays,
   Clock,
@@ -43,6 +45,8 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     { id: 'timeline', label: 'Timeline', icon: Clock },
     { id: 'focus', label: 'Focus', icon: Zap },
     { id: 'goals', label: 'Goals', icon: Target },
+    { id: 'alarms', label: 'Alarms', icon: AlarmClock },
+    { id: 'diary', label: 'Diary', icon: BookOpen },
     { id: 'categories', label: 'Categories', icon: Folder },
   ] as const;
   const isMoreTabActive = moreTabs.some((tab) => tab.id === activeTab);
@@ -62,7 +66,13 @@ export const BottomNav: React.FC<BottomNavProps> = ({
       <button
         onClick={onOpenQuickAdd}
         className="fixed right-4 bottom-[calc(4.8rem+env(safe-area-inset-bottom,0px))] sm:bottom-8 z-40 w-14 h-14 min-h-[56px] min-w-[56px] rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 text-white flex items-center justify-center shadow-xl shadow-indigo-600/40 hover:scale-105 active:scale-95 transition-all focus:outline-none lg:hidden"
-        title={activeTab === 'today' || activeTab === 'finance' ? 'Add Expense or Income' : 'Quick Add Task'}
+        title={
+          activeTab === 'today' || activeTab === 'finance'
+            ? 'Add Expense or Income'
+            : activeTab === 'diary'
+              ? 'New note'
+              : 'Quick Add Task'
+        }
       >
         <Plus className="w-7 h-7" />
       </button>

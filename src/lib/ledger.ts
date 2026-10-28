@@ -800,7 +800,9 @@ export function filterTransactions(
 // ---------------------------------------------------------------------------
 
 export const accountLabel = (account: Account): string => {
-  if (account.type === 'cash') return account.name;
+  if (account.type === 'cash' || account.type === 'gold' || account.type === 'stocks') {
+    return account.name;
+  }
   return account.lastFourDigits ? `${account.name} ····${account.lastFourDigits}` : account.name;
 };
 

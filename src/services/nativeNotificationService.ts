@@ -40,7 +40,7 @@ const ICON_COLOR = '#4f46e5';
  */
 function channelIdForSound(sound: SoundType, settings: NotificationSettings): string {
   if (!settings.soundEnabled) return SILENT_CHANNEL;
-  const resolved: SoundType = sound === 'voice' ? 'chime' : sound;
+  const resolved: SoundType = sound === 'voice' || sound === 'music' ? 'chime' : sound;
   return `${CHANNEL_PREFIX}${resolved}`;
 }
 
@@ -158,13 +158,16 @@ export async function syncScheduledNotifications(
   options: { granted: boolean },
   habits: Habit[] = [],
   checkIns: HabitCheckIn[] = [],
-  goals: Goal[] = []
+  goals: Goal[] = [],
+  hasMusic?: boolean
 ): Promise<ReminderSyncResult> {
   if (!isNativeAndroid()) return { scheduled: 0, cancelled: 0, skipped: true };
   if (!options.granted) return { scheduled: 0, cancelled: 0, skipped: true };
 
   try {
-    const plans = buildReminderPlans(tasks, settings, new Date(), habits, checkIns, goals);
+    const plans = buildReminderPlans(tasks, settings, new Date(), habits, checkIns, goals, hasMusic).filter(
+      (plan) => !plan.ring
+    );
     const desired = new Map(plans.map((plan) => [plan.notificationId, plan]));
     const now = Date.now();
 

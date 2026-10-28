@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Archive, Landmark, X } from 'lucide-react';
 import type { Account, AccountType, FinanceTransaction } from '../../types';
 import { ACCOUNT_TYPES } from '../../data/financeCategories';
-import { formatPaise } from '../../lib/money';import { computeAccountBalance } from '../../lib/ledger';
+import { formatPaise } from '../../lib/money';
+import { computeAccountBalance } from '../../lib/ledger';
 import { Button } from '../ui/Button';
 
 interface AccountModalProps {
@@ -61,7 +62,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
   if (!isOpen) return null;
 
-  const isCash = form.type === 'cash';
+  const hidesBankDetails = form.type === 'cash' || form.type === 'gold' || form.type === 'stocks';
 
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -82,7 +83,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       return;
     }
 
-    const digits = form.lastFourDigits.trim();
+    const digits = hidesBankDetails ? '' : form.lastFourDigits.trim();
     if (digits && !/^\d{4}$/.test(digits)) {
       setError('Last four digits must be exactly 4 numbers.');
       return;
@@ -107,9 +108,9 @@ export const AccountModal: React.FC<AccountModalProps> = ({
       id: initialAccount?.id,
       name,
       type: form.type,
-      bankName: isCash ? undefined : form.bankName.trim() || undefined,
+      bankName: hidesBankDetails ? undefined : form.bankName.trim() || undefined,
       accountNickname: form.accountNickname.trim() || undefined,
-      lastFourDigits: isCash ? undefined : digits || undefined,
+      lastFourDigits: hidesBankDetails ? undefined : digits || undefined,
       openingBalance: Math.round(opening * 100) / 100,
       isArchived: form.isArchived,
     });
@@ -150,7 +151,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
               type="text"
               value={form.name}
               onChange={(e) => update('name', e.target.value)}
-              placeholder="e.g. YES Bank, Cash Wallet"
+              placeholder="e.g. YES Bank, Physical gold, Stocks"
               className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               autoFocus
             />
@@ -179,7 +180,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
             </div>
           </div>
 
-          {!isCash && (
+          {!hidesBankDetails && (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -242,7 +243,9 @@ export const AccountModal: React.FC<AccountModalProps> = ({
               />
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-              The balance already in this account before you started tracking.
+              {form.type === 'gold' || form.type === 'stocks'
+                ? 'Rupees already held here before you started tracking. This is a value, not grams or shares.'
+                : 'The balance already in this account before you started tracking.'}
             </p>
             {currentBalancePaise != null && (
               <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mt-1 inline-flex items-center gap-1">

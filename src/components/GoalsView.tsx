@@ -17,6 +17,7 @@ interface GoalsViewProps {
   onSaveHabit: (habit: Partial<Habit>) => void;
   onLinkHabit: (habitId: string, goalId?: string) => void;
   onRegisterClose: (close: (() => void) | null) => void;
+  localMusicName?: string;
 }
 
 const STATUS_LABEL: Record<Goal['status'], string> = {
@@ -34,6 +35,7 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
   onSaveHabit,
   onLinkHabit,
   onRegisterClose,
+  localMusicName,
 }) => {
   const today = todayDateString();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -265,6 +267,7 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
         onSave={onSaveHabit}
         goals={goals}
         defaultGoalId={habitGoalId}
+        localMusicName={localMusicName}
       />
     </div>
   );
