@@ -1,4 +1,4 @@
-import { NotificationSettings, Task } from '../types';
+import { NotificationSettings, SoundType, Task } from '../types';
 import { audioService } from './audioService';
 import { isQuietHours } from '../lib/reminders';
 
@@ -89,6 +89,42 @@ export class NotificationService {
 
     // Always surface the in-app banner so the reminder is never missed.
     onAlertTriggered?.(task);
+  }
+
+  public static async sendSimpleNotification(
+    title: string,
+    body: string,
+    sound: SoundType | undefined,
+    tag: string,
+    settings: NotificationSettings
+  ) {
+    const quiet = this.isQuietHours(settings);
+    if (settings.soundEnabled && !quiet && sound) {
+      audioService.playSound(sound, title);
+    }
+    if (
+      settings.browserNotificationsEnabled &&
+      !quiet &&
+      'Notification' in window &&
+      Notification.permission === 'granted'
+    ) {
+      const icon = `${import.meta.env.BASE_URL}icons/icon-192.png`;
+      try {
+        const registration =
+          'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
+        if (registration) {
+          await registration.showNotification(title, { body, icon, tag });
+        } else {
+          const notification = new Notification(title, { body, icon, tag });
+          notification.onclick = () => {
+            window.focus();
+            notification.close();
+          };
+        }
+      } catch (e) {
+        console.warn('Habit notification failed:', e);
+      }
+    }
   }
 }
 

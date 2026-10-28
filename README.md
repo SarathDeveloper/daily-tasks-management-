@@ -81,7 +81,7 @@ Install dependencies:
 npm install
 ```
 
-Start the dev server (runs on http://localhost:3000):
+Start the dev server (runs on http://localhost:3001):
 
 ```bash
 npm run dev

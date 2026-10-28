@@ -1,12 +1,16 @@
 import React from 'react';
-import { Flame, CheckCircle, Clock, Zap, TrendingUp, Calendar } from 'lucide-react';
-import { Task } from '../types';
+import { Flame, CheckCircle, Clock, Zap, TrendingUp, Calendar, Repeat } from 'lucide-react';
+import { Goal, Habit, HabitCheckIn, Task } from '../types';
+import { habitCompletion, habitStreak, todayDateString, weekStartMonday } from '../lib/habits';
 
 interface StatsViewProps {
   tasks: Task[];
+  habits: Habit[];
+  checkIns: HabitCheckIn[];
+  goals: Goal[];
 }
 
-export const StatsView: React.FC<StatsViewProps> = ({ tasks }) => {
+export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, goals }) => {
   const totalTasks = tasks.length;
   const completedTasks = tasks.filter((t) => t.completed);
   const completedCount = completedTasks.length;
@@ -50,6 +54,29 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks }) => {
   };
 
   const streakDays = calculateStreak();
+  const today = todayDateString();
+  const weekStart = weekStartMonday(today);
+  const activeHabits = habits.filter((habit) => {
+    if (habit.archived) return false;
+    if (!habit.goalId) return true;
+    const goal = goals.find((item) => item.id === habit.goalId);
+    return !goal || goal.status !== 'paused';
+  });
+  let habitScheduled = 0;
+  let habitDone = 0;
+  let bestHabitStreak = 0;
+  let bestHabitUnit = 'days';
+  for (const habit of activeHabits) {
+    const completion = habitCompletion(habit, checkIns, weekStart, today);
+    habitScheduled += completion.scheduled;
+    habitDone += completion.done;
+    const streak = habitStreak(habit, checkIns, today);
+    if (streak > bestHabitStreak) {
+      bestHabitStreak = streak;
+      bestHabitUnit = habit.schedule.type === 'times_per_week' ? 'weeks' : 'days';
+    }
+  }
+  const habitWeekRate = habitScheduled === 0 ? 0 : Math.round((habitDone / habitScheduled) * 100);
 
   // Weekly Completion Bar Chart Data (last 7 days)
   const last7Days = Array.from({ length: 7 }, (_, i) => {
@@ -78,7 +105,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks }) => {
       </div>
 
       {/* KPI Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {/* Streak */}
         <div className="bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-2xl p-4 flex flex-col justify-between shadow-sm transition-colors">
           <div className="flex items-center justify-between text-amber-600 dark:text-amber-400">
@@ -128,6 +155,30 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks }) => {
           <div className="mt-2">
             <span className="text-3xl font-black text-slate-900 dark:text-white">{totalTasks}</span>
             <span className="text-xs text-slate-500 dark:text-slate-400 block">recorded tasks</span>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-2xl p-4 flex flex-col justify-between shadow-sm transition-colors">
+          <div className="flex items-center justify-between text-orange-600 dark:text-orange-400">
+            <span className="text-xs font-semibold">Best habit</span>
+            <Flame className="w-5 h-5" />
+          </div>
+          <div className="mt-2">
+            <span className="text-3xl font-black text-slate-900 dark:text-white">{bestHabitStreak}</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 block">{bestHabitUnit}</span>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-2xl p-4 flex flex-col justify-between shadow-sm transition-colors">
+          <div className="flex items-center justify-between text-indigo-600 dark:text-indigo-400">
+            <span className="text-xs font-semibold">Habit week</span>
+            <Repeat className="w-5 h-5" />
+          </div>
+          <div className="mt-2">
+            <span className="text-3xl font-black text-slate-900 dark:text-white">{habitWeekRate}%</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 block">
+              {habitDone} of {habitScheduled} this week
+            </span>
           </div>
         </div>
       </div>

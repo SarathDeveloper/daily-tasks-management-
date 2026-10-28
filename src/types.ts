@@ -91,12 +91,23 @@ export interface Goal {
   updatedAt: string;
 }
 
-export type HabitScheduleType = 'daily' | 'weekdays' | 'custom';
+export type HabitScheduleType = 'daily' | 'weekdays' | 'custom' | 'times_per_week';
+
+export type HabitColor = 'indigo' | 'emerald' | 'amber' | 'rose' | 'sky' | 'violet';
 
 export interface HabitSchedule {
   type: HabitScheduleType;
   /** 0 = Sunday … 6 = Saturday. Used when type is `custom`. */
   daysOfWeek?: number[];
+  /** 1–7. Used when type is `times_per_week`. */
+  timesPerWeek?: number;
+}
+
+export interface HabitReminder {
+  enabled: boolean;
+  time: string; // HH:mm
+  sound: SoundType;
+  lastNotifiedAt?: string;
 }
 
 export interface Habit {
@@ -106,6 +117,13 @@ export interface Habit {
   goalId?: string;
   schedule: HabitSchedule;
   archived: boolean;
+  color?: HabitColor;
+  /** Lucide icon name from the habit preset. */
+  icon?: string;
+  /** Amount that counts as done for the day. Missing or 1 is a simple check. */
+  targetCount?: number;
+  unit?: string;
+  reminder?: HabitReminder;
   createdAt: string;
   updatedAt: string;
 }
@@ -116,8 +134,20 @@ export interface HabitCheckIn {
   userId?: string;
   habitId: string;
   date: string; // YYYY-MM-DD
+  /** A skip keeps a daily streak but does not count as done. */
+  skipped?: boolean;
+  note?: string;
+  /** Logged amount. For a simple check, omit it or set it to at least 1. 0 is a note-only record. */
+  value?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** `null` deletes the day's check-in. */
+export interface HabitCheckInPatch {
+  skipped: boolean;
+  note?: string;
+  value?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -11,11 +11,14 @@ import {
 } from 'lucide-react';
 import {
   FinanceTransaction,
+  Goal,
   Habit,
   HabitCheckIn,
+  HabitCheckInPatch,
   Task,
 } from '../types';
-import { isScheduledOn } from '../lib/habits';
+import { habitBlockReason, isComplete, isScheduledOn } from '../lib/habits';
+import { habitColor } from '../lib/habitStyle';
 import { formatRupees } from '../lib/money';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -24,12 +27,13 @@ interface CalendarViewProps {
   selectedDate: string;
   onSelectDate: (date: string) => void;
   tasks: Task[];
+  goals: Goal[];
   habits: Habit[];
   checkIns: HabitCheckIn[];
   transactions: FinanceTransaction[];
   onToggleTask: (taskId: string) => void;
   onEditTask: (task: Task) => void;
-  onToggleCheckIn: (habitId: string, date: string) => void;
+  onSetCheckIn: (habitId: string, date: string, patch: HabitCheckInPatch | null) => void;
   onAddTask: () => void;
   onAddFinance: (type: 'income' | 'expense') => void;
 }
@@ -50,12 +54,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   selectedDate,
   onSelectDate,
   tasks,
+  goals,
   habits,
   checkIns,
   transactions,
   onToggleTask,
   onEditTask,
-  onToggleCheckIn,
+  onSetCheckIn,
   onAddTask,
   onAddFinance,
 }) => {
@@ -85,12 +90,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     [tasks, selectedDate]
   );
   const selectedHabits = useMemo(
-    () => habits.filter((habit) => !habit.archived && isScheduledOn(habit, selectedDate)),
-    [habits, selectedDate]
-  );
-  const selectedCheckIns = useMemo(
-    () => new Set(checkIns.filter((entry) => entry.date === selectedDate).map((entry) => entry.habitId)),
-    [checkIns, selectedDate]
+    () =>
+      habits.filter(
+        (habit) => !habitBlockReason(habit, goals) && isScheduledOn(habit, selectedDate)
+      ),
+    [goals, habits, selectedDate]
   );
   const isFutureDate = selectedDate > dateKey(new Date());
   const selectedTransactions = useMemo(
@@ -105,10 +109,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const habitsByDate = useMemo(() => {
     const counts = new Map<string, number>();
     for (const date of days) {
-      counts.set(date, habits.filter((habit) => !habit.archived && isScheduledOn(habit, date)).length);
+      counts.set(date, habits.filter((habit) => !habitBlockReason(habit, goals) && isScheduledOn(habit, date)).length);
     }
     return counts;
-  }, [days, habits]);
+  }, [days, goals, habits]);
   const transactionsByDate = useMemo(() => {
     const counts = new Map<string, number>();
     for (const entry of transactions) counts.set(entry.date, (counts.get(entry.date) || 0) + 1);
@@ -277,18 +281,27 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             {selectedHabits.length ? (
               <div className="space-y-1">
                 {selectedHabits.map((habit) => {
-                  const checked = selectedCheckIns.has(habit.id);
+                  const entry = checkIns.find((item) => item.habitId === habit.id && item.date === selectedDate);
+                  const checked = isComplete(habit, entry);
                   return (
                     <button
                       key={habit.id}
                       type="button"
-                      onClick={() => onToggleCheckIn(habit.id, selectedDate)}
+                      onClick={() => {
+                        const target = Math.max(1, habit.targetCount ?? 1);
+                        if (checked) onSetCheckIn(habit.id, selectedDate, null);
+                        else onSetCheckIn(habit.id, selectedDate, { skipped: false, value: target });
+                      }}
                       disabled={isFutureDate}
                       title={isFutureDate ? 'Future habits cannot be checked in yet.' : undefined}
                       className="flex min-h-10 w-full items-center gap-3 rounded-xl px-2 text-left text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200 dark:hover:bg-slate-800/60"
                     >
                       <span className={`flex h-6 w-6 items-center justify-center rounded-full ${
-                        checked ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' : 'border border-slate-300 text-transparent dark:border-slate-600'
+                        checked
+                          ? habitColor(habit.color).solid
+                          : entry?.skipped
+                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+                            : 'border border-slate-300 text-transparent dark:border-slate-600'
                       }`}>
                         {checked && <Check className="h-3.5 w-3.5" />}
                       </span>

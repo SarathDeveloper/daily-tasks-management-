@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -25,6 +25,8 @@ import { DebtModal } from './components/DebtModal';
 import { BillTemplateModal } from './components/BillTemplateModal';
 import { SavingsModal } from './components/SavingsModal';
 import { HabitsView } from './components/HabitsView';
+import { TodayHabitsCard } from './components/TodayHabitsCard';
+import { HabitModal } from './components/HabitModal';
 import { GoalsView } from './components/GoalsView';
 import { materializeRecurringTransactions } from './lib/financeRecurrence';
 import { materializeBillPayments } from './lib/billMaterializer';
@@ -83,6 +85,7 @@ import {
   writeSyncMeta,
 } from './lib/persistence';
 import { describeNextReminder } from './lib/reminders';
+import { habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
 import { useCloudSync } from './hooks/useCloudSync';
 import { CloudSyncSection } from './components/CloudSyncSection';
 import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
@@ -316,8 +319,9 @@ export default function App() {
     }
     return [];
   });
+  const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
 
-  // Streak is fully derived from entries � compute synchronously so the UI
+  // Streak is fully derived from entries — compute synchronously so the UI
   // never shows a stale streak after an add/edit/delete.
   const savingsStreak = useMemo<SavingsStreakState>(
     () => deriveStreakState(savingsEntries),
@@ -637,6 +641,12 @@ export default function App() {
   tasksRef.current = tasks;
   const settingsRef = useRef<NotificationSettings>(settings);
   settingsRef.current = settings;
+  const habitsRef = useRef<Habit[]>(habits);
+  habitsRef.current = habits;
+  const habitCheckInsRef = useRef<HabitCheckIn[]>(habitCheckIns);
+  habitCheckInsRef.current = habitCheckIns;
+  const goalsRef = useRef<Goal[]>(goals);
+  goalsRef.current = goals;
 
   // ---------------------------------------------------------------------
   // Reminders
@@ -661,10 +671,18 @@ export default function App() {
 
       removeListeners = await registerReminderListeners({
         onDue: (taskId) => {
+          if (taskId.startsWith('habit:')) {
+            setActiveTab('habits');
+            return;
+          }
           const task = tasksRef.current.find((t) => t.id === taskId);
           if (task) setActiveAlert({ task, triggeredAt: new Date() });
         },
         onOpened: (taskId) => {
+          if (taskId.startsWith('habit:')) {
+            setActiveTab('habits');
+            return;
+          }
           const task = tasksRef.current.find((t) => t.id === taskId);
           if (!task) return;
           setSelectedDate(task.date);
@@ -688,10 +706,10 @@ export default function App() {
   useEffect(() => {
     if (!isNativeAndroid() || !nativeSetup?.granted) return;
     const timer = setTimeout(() => {
-      void syncScheduledNotifications(tasks, settings, { granted: true });
+      void syncScheduledNotifications(tasks, settings, { granted: true }, habits, habitCheckIns, goals);
     }, 600);
     return () => clearTimeout(timer);
-  }, [tasks, settings, nativeSetup?.granted]);
+  }, [tasks, settings, habits, habitCheckIns, goals, nativeSetup?.granted]);
 
   // Coming back to the foreground: re-check permissions and reschedule, since
   // Android drops alarms scheduled while exact-alarm access was revoked.
@@ -707,7 +725,14 @@ export default function App() {
         setPermissionStatus(granted ? 'granted' : 'denied');
         setNativeSetup((prev) => (prev ? { ...prev, granted } : prev));
         if (granted) {
-          await syncScheduledNotifications(tasksRef.current, settingsRef.current, { granted: true });
+          await syncScheduledNotifications(
+            tasksRef.current,
+            settingsRef.current,
+            { granted: true },
+            habitsRef.current,
+            habitCheckInsRef.current,
+            goalsRef.current
+          );
         }
       })();
     }).then((handle) => {
@@ -768,6 +793,45 @@ export default function App() {
           return t;
         })
       );
+
+      setHabits((prev) => {
+        let changed = false;
+        const next = prev.map((habit) => {
+          if (!habit.reminder?.enabled || !habit.reminder.time) return habit;
+          if (habitBlockReason(habit, goalsRef.current)) return habit;
+          if (!isScheduledOn(habit, todayDateStr)) return habit;
+          if (!isDueToday(habit, todayDateStr, goalsRef.current, habitCheckInsRef.current)) return habit;
+          const entry = habitCheckInsRef.current.find(
+            (item) => item.habitId === habit.id && item.date === todayDateStr
+          );
+          if (isComplete(habit, entry) || isSkipped(entry)) return habit;
+
+          const [hours, minutes] = habit.reminder.time.split(':').map(Number);
+          if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return habit;
+          const remindAtMins = hours * 60 + minutes;
+          if (currentMins < remindAtMins || currentMins > remindAtMins + 2) return habit;
+
+          const lastNotified = habit.reminder.lastNotifiedAt
+            ? new Date(habit.reminder.lastNotifiedAt).getTime()
+            : 0;
+          if (lastNotified >= now.getTime() - 120000) return habit;
+
+          void NotificationService.sendSimpleNotification(
+            `Habit: ${habit.title}`,
+            habit.reminder.time,
+            habit.reminder.sound,
+            `habit-${habit.id}`,
+            settings
+          );
+          changed = true;
+          return {
+            ...habit,
+            reminder: { ...habit.reminder, lastNotifiedAt: now.toISOString() },
+            updatedAt: now.toISOString(),
+          };
+        });
+        return changed ? next : prev;
+      });
     };
 
     const timer = setInterval(checkReminders, 5000);
@@ -794,6 +858,10 @@ export default function App() {
   // change leaked listeners and made one back press fire several handlers).
   const backHandlerRef = useRef<() => void>(() => {});
   backHandlerRef.current = () => {
+    if (editingHabit) {
+      setEditingHabit(null);
+      return;
+    }
     if (closeHabitModalRef.current) {
       const close = closeHabitModalRef.current;
       closeHabitModalRef.current = null;
@@ -1248,6 +1316,15 @@ export default function App() {
 
   const handleSaveHabit = (partial: Partial<Habit>) => {
     const now = new Date().toISOString();
+    const reminder = partial.reminder?.enabled
+      ? {
+          enabled: true as const,
+          time: partial.reminder.time || '08:00',
+          sound: partial.reminder.sound,
+          lastNotifiedAt: partial.reminder.lastNotifiedAt,
+        }
+      : undefined;
+    const targetCount = partial.targetCount && partial.targetCount > 1 ? partial.targetCount : undefined;
     if (partial.id) {
       setHabits((prev) =>
         prev.map((habit) =>
@@ -1258,6 +1335,13 @@ export default function App() {
                 goalId: partial.goalId || undefined,
                 schedule: partial.schedule || habit.schedule,
                 archived: partial.archived ?? habit.archived,
+                color: partial.color === undefined ? habit.color : partial.color,
+                icon: partial.icon === undefined ? habit.icon : partial.icon,
+                targetCount,
+                unit: targetCount ? partial.unit?.trim() || undefined : undefined,
+                reminder: reminder
+                  ? { ...reminder, lastNotifiedAt: habit.reminder?.lastNotifiedAt }
+                  : undefined,
                 updatedAt: now,
               }
             : habit
@@ -1273,6 +1357,11 @@ export default function App() {
       goalId: partial.goalId || undefined,
       schedule: partial.schedule || { type: 'daily' },
       archived: partial.archived ?? false,
+      color: partial.color,
+      icon: partial.icon,
+      targetCount,
+      unit: targetCount ? partial.unit?.trim() || undefined : undefined,
+      reminder,
       createdAt: now,
       updatedAt: now,
     };
@@ -1286,12 +1375,18 @@ export default function App() {
     setHabitCheckIns((prev) => prev.filter((entry) => entry.habitId !== id));
   };
 
-  const handleToggleCheckIn = (habitId: string, date: string) => {
+  const handleSetCheckIn = (habitId: string, date: string, patch: HabitCheckInPatch | null) => {
+    const today = todayDateString();
+    if (date > today) return;
+    const habit = habits.find((item) => item.id === habitId);
+    if (!habit || habitBlockReason(habit, goals) || !isScheduledOn(habit, date)) return;
+
     const now = new Date().toISOString();
     const id = `checkin-${habitId}-${date}`;
     setHabitCheckIns((prev) => {
       const existing = prev.filter((entry) => entry.habitId === habitId && entry.date === date);
-      if (existing.length > 0) {
+      if (patch === null) {
+        if (existing.length === 0) return prev;
         markDeleted(
           storageKeys,
           existing.map((entry) => entry.id)
@@ -1299,18 +1394,22 @@ export default function App() {
         const ids = new Set(existing.map((entry) => entry.id));
         return prev.filter((entry) => !ids.has(entry.id));
       }
+      const prior = existing.find((entry) => entry.id === id) ?? existing[0];
+      const extras = existing.filter((entry) => entry.id !== id).map((entry) => entry.id);
+      if (extras.length > 0) markDeleted(storageKeys, extras);
       unmarkDeleted(storageKeys, [id]);
-      return [
-        ...prev,
-        {
-          id,
-          userId: currentUser?.id,
-          habitId,
-          date,
-          createdAt: now,
-          updatedAt: now,
-        },
-      ];
+      const next: HabitCheckIn = {
+        id,
+        userId: currentUser?.id ?? prior?.userId,
+        habitId,
+        date,
+        skipped: patch.skipped || undefined,
+        note: patch.note?.trim() || undefined,
+        value: patch.skipped ? undefined : patch.value,
+        createdAt: prior?.createdAt ?? now,
+        updatedAt: now,
+      };
+      return [...prev.filter((entry) => entry.habitId !== habitId || entry.date !== date), next];
     });
   };
 
@@ -2109,6 +2208,16 @@ export default function App() {
         {/* TODAY VIEW */}
         {activeTab === 'today' && (
           <div className="space-y-5">
+            <TodayHabitsCard
+              date={selectedDate}
+              goals={goals}
+              habits={habits}
+              checkIns={habitCheckIns}
+              onSetCheckIn={handleSetCheckIn}
+              onEditHabit={setEditingHabit}
+              onDeleteHabit={handleDeleteHabit}
+              onOpenHabits={() => setActiveTab('habits')}
+            />
             {/* Search, Filter & Sort Controls */}
             <Card className="p-3 space-y-2.5">
               {/* Full Width Search Bar */}
@@ -2344,6 +2453,7 @@ export default function App() {
             selectedDate={selectedDate}
             onSelectDate={setSelectedDate}
             tasks={tasks}
+            goals={goals}
             habits={habits}
             checkIns={habitCheckIns}
             transactions={transactions}
@@ -2352,7 +2462,7 @@ export default function App() {
               setEditingTask(task);
               setIsTaskModalOpen(true);
             }}
-            onToggleCheckIn={handleToggleCheckIn}
+            onSetCheckIn={handleSetCheckIn}
             onAddTask={() => {
               setEditingTask(null);
               setIsTaskModalOpen(true);
@@ -2404,7 +2514,7 @@ export default function App() {
             goals={goals}
             habits={habits}
             checkIns={habitCheckIns}
-            onToggleCheckIn={handleToggleCheckIn}
+            onSetCheckIn={handleSetCheckIn}
             onSaveHabit={handleSaveHabit}
             onDeleteHabit={handleDeleteHabit}
             onOpenGoals={() => setActiveTab('goals')}
@@ -2431,7 +2541,9 @@ export default function App() {
         )}
 
         {/* STATS & STREAK VIEW */}
-        {activeTab === 'stats' && <StatsView tasks={tasks} />}
+        {activeTab === 'stats' && (
+          <StatsView tasks={tasks} habits={habits} checkIns={habitCheckIns} goals={goals} />
+        )}
 
         {/* PERSONAL FINANCE VIEW */}
         {activeTab === 'finance' && (
@@ -2607,6 +2719,17 @@ export default function App() {
         selectedDate={selectedDate}
       />
 
+      <HabitModal
+        isOpen={editingHabit !== null}
+        onClose={() => setEditingHabit(null)}
+        onSave={(habit) => {
+          handleSaveHabit(habit);
+          setEditingHabit(null);
+        }}
+        initialHabit={editingHabit}
+        goals={goals}
+      />
+
       {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
@@ -2624,7 +2747,7 @@ export default function App() {
             ? { permissionGranted: nativeSetup.granted, exactAlarm: nativeSetup.exactAlarm }
             : null
         }
-        nextReminder={isNativeAndroid() ? describeNextReminder(tasks, settings) : null}
+        nextReminder={isNativeAndroid() ? describeNextReminder(tasks, settings, habits, habitCheckIns, goals) : null}
         onRequestExactAlarm={handleOpenExactAlarmSettings}
       />
 

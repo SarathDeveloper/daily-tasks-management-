@@ -3,10 +3,15 @@ import type { Goal, Habit, HabitCheckIn } from '../types';
 import {
   addDays,
   goalProgress,
+  habitCompletion,
   habitStreak,
   isDueToday,
   isScheduledOn,
+  longestStreak,
+  monthHeatmap,
   recentSchedule,
+  weekDates,
+  weekStartMonday,
   weekdayOf,
 } from './habits';
 
@@ -251,5 +256,73 @@ describe('goal consistency', () => {
     expect(isDueToday(archived, today, goals)).toBe(false);
     expect(isDueToday(pausedHabit, today, goals)).toBe(false);
     expect(isDueToday(habit({ id: 'free', goalId: undefined }), today, goals)).toBe(true);
+    expect(isDueToday(active, today, [goal({ status: 'completed' })])).toBe(false);
+  });
+});
+
+describe('habit completion and longest streak', () => {
+  const today = '2026-10-05';
+
+  it('keeps a daily streak across a skip and ignores a note-only record', () => {
+    const item = habit();
+    const skip = checks('habit-1', ['2026-10-04']).map((entry) => ({ ...entry, skipped: true }));
+    const done = checks('habit-1', ['2026-10-01', '2026-10-02', '2026-10-03']);
+    expect(habitStreak(item, [...done, ...skip], today)).toBe(4);
+    expect(longestStreak(item, [...done, ...skip], today)).toBe(4);
+
+    const noteOnly = checks('habit-1', ['2026-10-04']).map((entry) => ({ ...entry, value: 0, note: 'later' }));
+    expect(habitStreak(item, [...done, ...noteOnly], today)).toBe(0);
+  });
+
+  it('reports completion without counting skips as done', () => {
+    const stats = habitCompletion(
+      habit(),
+      [
+        ...checks('habit-1', ['2026-10-01', '2026-10-02', '2026-10-03']),
+        ...checks('habit-1', ['2026-10-04']).map((entry) => ({ ...entry, skipped: true })),
+      ],
+      '2026-10-01',
+      today
+    );
+    expect(stats.scheduled).toBe(5);
+    expect(stats.done).toBe(3);
+    expect(stats.skipped).toBe(1);
+    expect(stats.percent).toBe(75);
+  });
+
+  it('counts times-per-week quotas, with the open week in grace', () => {
+    const monday = weekStartMonday(today);
+    const previous = addDays(monday, -7);
+    const item = habit({
+      schedule: { type: 'times_per_week', timesPerWeek: 3 },
+      createdAt: localNoonIso(addDays(previous, -7)),
+    });
+    const met = weekDates(previous).slice(0, 3);
+    expect(habitStreak(item, checks('habit-1', met), monday)).toBe(1);
+    expect(longestStreak(item, checks('habit-1', met), monday)).toBe(1);
+    expect(isDueToday(item, monday, [], [])).toBe(true);
+
+    const wednesday = weekDates(monday)[2];
+    const logged = [...weekDates(monday).slice(0, 2), wednesday];
+    expect(isDueToday(item, wednesday, [], checks('habit-1', logged))).toBe(true);
+    const thursday = weekDates(monday)[3];
+    expect(isDueToday(item, thursday, [], checks('habit-1', logged.slice(0, 3)))).toBe(false);
+
+    const stats = habitCompletion(item, checks('habit-1', met), previous, addDays(previous, 6));
+    expect(stats.scheduled).toBe(3);
+    expect(stats.done).toBe(3);
+    expect(stats.percent).toBe(100);
+  });
+
+  it('builds a Monday-aligned month grid', () => {
+    const cells = monthHeatmap(habit(), checks('habit-1', ['2026-10-01']), 2026, 10, today);
+    expect(cells.length % 7).toBe(0);
+    expect(cells[0].date).toBe(weekStartMonday('2026-10-01'));
+    const first = cells.find((cell) => cell.date === '2026-10-01');
+    expect(first).toMatchObject({ inMonth: true, state: 'done' });
+    const missed = cells.find((cell) => cell.date === '2026-10-02');
+    expect(missed?.state).toBe('missed');
+    const open = cells.find((cell) => cell.date === today);
+    expect(open?.state).toBe('pending');
   });
 });

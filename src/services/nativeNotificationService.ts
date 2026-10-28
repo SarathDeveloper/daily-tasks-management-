@@ -8,7 +8,7 @@
  * swiped away and the device rebooting.
  */
 import { LocalNotifications } from '@capacitor/local-notifications';
-import type { NotificationSettings, SoundType, Task } from '../types';
+import type { Goal, Habit, HabitCheckIn, NotificationSettings, SoundType, Task } from '../types';
 import { buildReminderPlans } from '../lib/reminders';
 import { isNativeAndroid } from '../lib/platform';
 
@@ -155,13 +155,16 @@ function pendingToMs(value: unknown): number {
 export async function syncScheduledNotifications(
   tasks: Task[],
   settings: NotificationSettings,
-  options: { granted: boolean }
+  options: { granted: boolean },
+  habits: Habit[] = [],
+  checkIns: HabitCheckIn[] = [],
+  goals: Goal[] = []
 ): Promise<ReminderSyncResult> {
   if (!isNativeAndroid()) return { scheduled: 0, cancelled: 0, skipped: true };
   if (!options.granted) return { scheduled: 0, cancelled: 0, skipped: true };
 
   try {
-    const plans = buildReminderPlans(tasks, settings);
+    const plans = buildReminderPlans(tasks, settings, new Date(), habits, checkIns, goals);
     const desired = new Map(plans.map((plan) => [plan.notificationId, plan]));
     const now = Date.now();
 
@@ -227,7 +230,7 @@ export async function syncScheduledNotifications(
           autoCancel: true,
           foreground: true,
           group: GROUP_KEY,
-          extra: { taskId: plan.taskId },
+          extra: { taskId: plan.habitId ? `habit:${plan.habitId}` : plan.taskId, habitId: plan.habitId },
         })),
       });
     }

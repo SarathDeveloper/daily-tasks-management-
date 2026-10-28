@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Repeat, X } from 'lucide-react';
-import type { Goal, Habit, HabitScheduleType } from '../types';
+import { Bell, Minus, Plus, Repeat, Volume2, X } from 'lucide-react';
+import type { Goal, Habit, HabitColor, HabitScheduleType, SoundType } from '../types';
+import { audioService } from '../services/audioService';
+import { HABIT_COLOR_IDS, habitColor } from '../lib/habitStyle';
+import { HABIT_ICON_IDS, HabitIcon } from './HabitIcon';
 import { Button } from './ui/Button';
 
 interface HabitModalProps {
@@ -18,6 +21,15 @@ const SCHEDULES: { id: HabitScheduleType; label: string }[] = [
   { id: 'daily', label: 'Every day' },
   { id: 'weekdays', label: 'Weekdays' },
   { id: 'custom', label: 'Choose days' },
+  { id: 'times_per_week', label: 'Times / week' },
+];
+
+const SOUNDS: { id: SoundType; label: string }[] = [
+  { id: 'chime', label: 'Gentle Chime' },
+  { id: 'bell', label: 'Harmonic Bell' },
+  { id: 'digital', label: 'Digital Pulse' },
+  { id: 'gentle', label: 'Soothing Chord' },
+  { id: 'voice', label: 'Voice' },
 ];
 
 export const HabitModal: React.FC<HabitModalProps> = ({
@@ -31,8 +43,16 @@ export const HabitModal: React.FC<HabitModalProps> = ({
   const [title, setTitle] = useState('');
   const [scheduleType, setScheduleType] = useState<HabitScheduleType>('daily');
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([]);
+  const [timesPerWeek, setTimesPerWeek] = useState(3);
   const [goalId, setGoalId] = useState('');
   const [archived, setArchived] = useState(false);
+  const [color, setColor] = useState<HabitColor>('indigo');
+  const [icon, setIcon] = useState<string>('Repeat');
+  const [targetCount, setTargetCount] = useState(1);
+  const [unit, setUnit] = useState('');
+  const [reminderEnabled, setReminderEnabled] = useState(false);
+  const [reminderTime, setReminderTime] = useState('08:00');
+  const [sound, setSound] = useState<SoundType>('chime');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -40,14 +60,30 @@ export const HabitModal: React.FC<HabitModalProps> = ({
       setTitle(initialHabit.title);
       setScheduleType(initialHabit.schedule.type);
       setDaysOfWeek(initialHabit.schedule.daysOfWeek ?? []);
+      setTimesPerWeek(initialHabit.schedule.timesPerWeek ?? 3);
       setGoalId(initialHabit.goalId ?? '');
       setArchived(initialHabit.archived);
+      setColor(initialHabit.color ?? 'indigo');
+      setIcon(initialHabit.icon ?? 'Repeat');
+      setTargetCount(initialHabit.targetCount && initialHabit.targetCount > 1 ? initialHabit.targetCount : 1);
+      setUnit(initialHabit.unit ?? '');
+      setReminderEnabled(initialHabit.reminder?.enabled ?? false);
+      setReminderTime(initialHabit.reminder?.time || '08:00');
+      setSound(initialHabit.reminder?.sound || 'chime');
     } else {
       setTitle('');
       setScheduleType('daily');
       setDaysOfWeek([]);
+      setTimesPerWeek(3);
       setGoalId(defaultGoalId ?? '');
       setArchived(false);
+      setColor('indigo');
+      setIcon('Repeat');
+      setTargetCount(1);
+      setUnit('');
+      setReminderEnabled(false);
+      setReminderTime('08:00');
+      setSound('chime');
     }
   }, [defaultGoalId, initialHabit, isOpen]);
 
@@ -72,8 +108,21 @@ export const HabitModal: React.FC<HabitModalProps> = ({
       schedule: {
         type: scheduleType,
         daysOfWeek: scheduleType === 'custom' ? daysOfWeek : undefined,
+        timesPerWeek: scheduleType === 'times_per_week' ? timesPerWeek : undefined,
       },
       archived,
+      color,
+      icon,
+      targetCount: targetCount > 1 ? targetCount : undefined,
+      unit: targetCount > 1 ? unit.trim() || undefined : undefined,
+      reminder: reminderEnabled
+        ? {
+            enabled: true,
+            time: reminderTime || '08:00',
+            sound,
+            lastNotifiedAt: initialHabit?.reminder?.lastNotifiedAt,
+          }
+        : undefined,
     });
     onClose();
   };
@@ -113,7 +162,7 @@ export const HabitModal: React.FC<HabitModalProps> = ({
             <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
               Schedule
             </span>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {SCHEDULES.map((option) => (
                 <button
                   key={option.id}
@@ -155,6 +204,91 @@ export const HabitModal: React.FC<HabitModalProps> = ({
                 })}
               </div>
             )}
+            {scheduleType === 'times_per_week' && (
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Fewer times per week"
+                  onClick={() => setTimesPerWeek((value) => Math.max(1, value - 1))}
+                  className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center"
+                >
+                  <Minus className="w-4 h-4" />
+                </button>
+                <span className="text-sm font-bold min-w-[5.5rem] text-center">{timesPerWeek}× / week</span>
+                <button
+                  type="button"
+                  aria-label="More times per week"
+                  onClick={() => setTimesPerWeek((value) => Math.min(7, value + 1))}
+                  className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Target
+            </span>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min={1}
+                max={999}
+                value={targetCount}
+                onChange={(event) => setTargetCount(Math.max(1, Number(event.target.value) || 1))}
+                aria-label="Target amount"
+                className="w-24 bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[40px]"
+              />
+              <input
+                value={unit}
+                onChange={(event) => setUnit(event.target.value)}
+                placeholder={targetCount > 1 ? 'pages, min, cups' : 'Optional unit'}
+                disabled={targetCount <= 1}
+                aria-label="Target unit"
+                className="flex-1 bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[40px] disabled:opacity-50"
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">1 is a simple check. More than 1 logs an amount.</p>
+          </div>
+
+          <div>
+            <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Color</span>
+            <div className="flex gap-2">
+              {HABIT_COLOR_IDS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-label={`${option} color`}
+                  onClick={() => setColor(option)}
+                  className={`w-8 h-8 rounded-full ${habitColor(option).swatch} ${
+                    color === option ? 'ring-2 ring-offset-2 ring-slate-900 dark:ring-white dark:ring-offset-slate-900' : ''
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Icon</span>
+            <div className="flex flex-wrap gap-1.5">
+              {HABIT_ICON_IDS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-label={option}
+                  onClick={() => setIcon(option)}
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center border ${
+                    icon === option
+                      ? 'bg-indigo-600 text-white border-indigo-500'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                  }`}
+                >
+                  <HabitIcon name={option} className="w-4 h-4" />
+                </button>
+              ))}
+            </div>
           </div>
 
           <div>
@@ -173,6 +307,59 @@ export const HabitModal: React.FC<HabitModalProps> = ({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="p-3.5 bg-slate-50 dark:bg-slate-950/60 rounded-xl border border-slate-200 dark:border-slate-800/80 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                <Bell className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                Reminder
+              </label>
+              <input
+                type="checkbox"
+                checked={reminderEnabled}
+                onChange={(event) => setReminderEnabled(event.target.checked)}
+                aria-label="Enable reminder"
+                className="w-4 h-4 rounded border-slate-300"
+              />
+            </div>
+            {reminderEnabled && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div>
+                  <label className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1">Time</label>
+                  <input
+                    type="time"
+                    value={reminderTime}
+                    onChange={(event) => setReminderTime(event.target.value)}
+                    className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-200"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1">Sound</label>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={sound}
+                      onChange={(event) => setSound(event.target.value as SoundType)}
+                      className="flex-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-200"
+                    >
+                      {SOUNDS.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      title="Preview sound"
+                      onClick={() => audioService.playSound(sound, title || 'Habit reminder')}
+                      className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700/60"
+                    >
+                      <Volume2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {initialHabit && (

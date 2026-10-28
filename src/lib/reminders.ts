@@ -6,7 +6,19 @@
  * current task list every time, never appended to, which is what keeps the
  * phone's pending alarms in sync with edits, deletes, snoozes and completion.
  */
-import type { NotificationSettings, SoundType, Task } from '../types';
+import type { Goal, Habit, HabitCheckIn, NotificationSettings, SoundType, Task } from '../types';
+import {
+  addDays,
+  checkInMap,
+  habitBlockReason,
+  isComplete,
+  isScheduledOn,
+  isSkipped,
+  quotaForWeek,
+  todayDateString,
+  weekDates,
+  weekStartMonday,
+} from './habits';
 
 /** Do not schedule further out than this; keeps the alarm list small. */
 export const MAX_SCHEDULE_HORIZON_DAYS = 60;
@@ -23,6 +35,8 @@ export interface ReminderPlan {
   body: string;
   /** The task's own chime choice; drives the Android notification channel. */
   sound: SoundType;
+  /** Set when this plan belongs to a habit rather than a task. */
+  habitId?: string;
 }
 
 /**
@@ -74,7 +88,10 @@ export function hashNotificationId(taskId: string): number {
 export function buildReminderPlans(
   tasks: Task[],
   settings: NotificationSettings,
-  now: Date = new Date()
+  now: Date = new Date(),
+  habits: Habit[] = [],
+  checkIns: HabitCheckIn[] = [],
+  goals: Goal[] = []
 ): ReminderPlan[] {
   const nowMs = now.getTime();
   const horizonMs = nowMs + MAX_SCHEDULE_HORIZON_DAYS * 24 * 60 * 60 * 1000;
@@ -118,8 +135,71 @@ export function buildReminderPlans(
     });
   }
 
+  appendHabitPlans(plans, usedIds, habits, checkIns, goals, settings, nowMs, horizonMs);
+
   plans.sort((a, b) => a.fireAt.getTime() - b.fireAt.getTime());
   return plans.slice(0, MAX_SCHEDULED_REMINDERS);
+}
+
+function appendHabitPlans(
+  plans: ReminderPlan[],
+  usedIds: Set<number>,
+  habits: Habit[],
+  checkIns: HabitCheckIn[],
+  goals: Goal[],
+  settings: NotificationSettings,
+  nowMs: number,
+  horizonMs: number
+): void {
+  const today = todayDateString(new Date(nowMs));
+  for (const habit of habits) {
+    if (!habit.reminder?.enabled || !habit.reminder.time) continue;
+    if (habitBlockReason(habit, goals)) continue;
+    const map = checkInMap(habit.id, checkIns);
+    const plannedThisWeek = new Map<string, number>();
+    let day = today;
+    for (let guard = 0; guard < MAX_SCHEDULE_HORIZON_DAYS; guard += 1) {
+      if (isScheduledOn(habit, day)) {
+        const entry = map.get(day);
+        const satisfied = isComplete(habit, entry) || isSkipped(entry);
+        if (!satisfied) {
+          let allowed = true;
+          let monday = '';
+          if (habit.schedule.type === 'times_per_week') {
+            monday = weekStartMonday(day);
+            const completes = weekDates(monday).filter((date) => isComplete(habit, map.get(date))).length;
+            const planned = plannedThisWeek.get(monday) ?? 0;
+            const quota = quotaForWeek(habit, monday);
+            allowed = quota > 0 && completes + planned < quota;
+          }
+          if (allowed) {
+            const fireAt = parseTaskDateTime(day, habit.reminder.time);
+            const fireMs = fireAt?.getTime() ?? NaN;
+            if (
+              fireAt &&
+              fireMs >= nowMs + MIN_LEAD_MS &&
+              fireMs <= horizonMs &&
+              !isQuietHours(settings, fireAt)
+            ) {
+              plans.push({
+                taskId: `habit:${habit.id}`,
+                habitId: habit.id,
+                notificationId: reserveNotificationId(hashNotificationId(`habit:${habit.id}:${day}`), usedIds),
+                fireAt,
+                title: habit.title,
+                body: `Habit · ${habit.reminder.time}`,
+                sound: habit.reminder.sound ?? settings.defaultSound,
+              });
+              if (habit.schedule.type === 'times_per_week' && monday) {
+                plannedThisWeek.set(monday, (plannedThisWeek.get(monday) ?? 0) + 1);
+              }
+            }
+          }
+        }
+      }
+      day = addDays(day, 1);
+    }
+  }
 }
 
 /** Linear probing avoids two tasks colliding on the same notification id. */
@@ -134,14 +214,22 @@ function reserveNotificationId(initial: number, used: Set<number>): number {
 }
 
 /** Human-readable summary for the settings screen, e.g. "in 12 min". */
-export function describeNextReminder(tasks: Task[], settings: NotificationSettings): string | null {
-  const [next] = buildReminderPlans(tasks, settings);
+export function describeNextReminder(
+  tasks: Task[],
+  settings: NotificationSettings,
+  habits: Habit[] = [],
+  checkIns: HabitCheckIn[] = [],
+  goals: Goal[] = []
+): string | null {
+  const [next] = buildReminderPlans(tasks, settings, new Date(), habits, checkIns, goals);
   if (!next) return null;
   const minutes = Math.round((next.fireAt.getTime() - Date.now()) / 60_000);
-  const task = tasks.find((t) => t.id === next.taskId);
-  if (minutes <= 1) return `${task?.title ?? 'Next task'} - in under a minute`;
-  if (minutes < 60) return `${task?.title ?? 'Next task'} - in ${minutes} min`;
+  const habit = next.habitId ? habits.find((item) => item.id === next.habitId) : undefined;
+  const task = tasks.find((item) => item.id === next.taskId);
+  const title = habit?.title ?? task?.title ?? next.title;
+  if (minutes <= 1) return `${title} - in under a minute`;
+  if (minutes < 60) return `${title} - in ${minutes} min`;
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${task?.title ?? 'Next task'} - in ${hours} h`;
-  return `${task?.title ?? 'Next task'} - in ${Math.round(hours / 24)} d`;
+  if (hours < 24) return `${title} - in ${hours} h`;
+  return `${title} - in ${Math.round(hours / 24)} d`;
 }
