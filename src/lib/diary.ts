@@ -1,4 +1,4 @@
-import type { DiaryEntry, DiaryMood, HabitColor } from '../types';
+import type { DiaryEntry, DiaryImage, DiaryMood, HabitColor } from '../types';
 import { habitColor, type HabitColorClasses } from './habitStyle';
 
 export const DIARY_MOODS: { id: DiaryMood; label: string }[] = [
@@ -20,11 +20,18 @@ const MOOD_COLOR: Record<DiaryMood, HabitColor> = {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+/** Photos kept on one note. Extra picks are refused. */
+export const MAX_DIARY_IMAGES = 4;
+
+/** Rough cap for the whole diary in localStorage, in JSON characters. */
+export const MAX_DIARY_STORAGE_CHARS = 4_500_000;
+
 export interface DiaryDraft {
   date: string;
   time: string;
   mood: string;
   body: string;
+  imageCount?: number;
 }
 
 export function isDiaryMood(value: string): value is DiaryMood {
@@ -53,8 +60,27 @@ export function validateDiaryDraft(draft: DiaryDraft): string | null {
   }
   if (!TIME_PATTERN.test(draft.time)) return 'Choose a valid time.';
   if (!isDiaryMood(draft.mood)) return 'Choose a mood.';
-  if (!draft.body.trim()) return 'Write a note before saving.';
+  const imageCount = draft.imageCount ?? 0;
+  if (imageCount > MAX_DIARY_IMAGES) return `A note can hold up to ${MAX_DIARY_IMAGES} photos.`;
+  if (!draft.body.trim() && imageCount === 0) return 'Write a note or add a photo before saving.';
   return null;
+}
+
+/** Drops anything that is not a stored photo and keeps at most `MAX_DIARY_IMAGES`. */
+export function sanitizeDiaryImages(images: DiaryImage[] | undefined): DiaryImage[] {
+  if (!Array.isArray(images)) return [];
+  const clean: DiaryImage[] = [];
+  for (const image of images) {
+    if (!image || typeof image.id !== 'string' || !image.id) continue;
+    if (typeof image.dataUrl !== 'string' || !image.dataUrl.startsWith('data:image/')) continue;
+    clean.push({ id: image.id, dataUrl: image.dataUrl });
+    if (clean.length >= MAX_DIARY_IMAGES) break;
+  }
+  return clean;
+}
+
+export function diaryCollectionFits(entries: DiaryEntry[]): boolean {
+  return JSON.stringify(entries).length <= MAX_DIARY_STORAGE_CHARS;
 }
 
 /** Latest clock time first. Equal times keep the newer edit first. */

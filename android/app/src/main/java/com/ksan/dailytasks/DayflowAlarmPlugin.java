@@ -99,9 +99,13 @@ public class DayflowAlarmPlugin extends Plugin {
 
     @PluginMethod
     public void sync(PluginCall call) {
-        JSArray plans = call.getArray("plans");
-        AlarmScheduler.replace(getContext(), plans == null ? new JSONArray() : plans);
-        call.resolve();
+        try {
+            JSArray plans = call.getArray("plans");
+            AlarmScheduler.replace(getContext(), plans == null ? new JSONArray() : plans);
+            call.resolve();
+        } catch (Exception error) {
+            call.reject("Could not update alarms", error);
+        }
     }
 
     @PluginMethod

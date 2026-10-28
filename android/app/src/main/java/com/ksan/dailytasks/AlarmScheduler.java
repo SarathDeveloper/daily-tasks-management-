@@ -83,10 +83,7 @@ public final class AlarmScheduler {
         intent.putExtra(EXTRA_NOTIFICATION_ID, requestCode);
         intent.putExtra(EXTRA_TIME, plan.optString("time", ""));
         intent.putExtra(EXTRA_DAYS, daysToCsv(plan.optJSONArray("daysOfWeek")));
-        Intent activity = new Intent(context, DayflowRingActivity.class);
-        activity.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        activity.putExtras(intent);
-        PendingIntent pending = ringPending(context, requestCode, activity);
+        PendingIntent pending = alarmPending(context, requestCode, intent);
         AlarmManager manager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (manager == null) return;
         try {
@@ -127,14 +124,18 @@ public final class AlarmScheduler {
         }
     }
 
-    /** AlarmManager launches the ringing screen itself, so the screen can appear while the app is closed. */
+    private static PendingIntent alarmPending(Context context, int requestCode, Intent intent) {
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getBroadcast(context, requestCode, intent, flags);
+    }
+
+    /** Cancels a ringing-screen pending intent left by an older build. */
     private static PendingIntent ringPending(Context context, int requestCode, Intent activity) {
         int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ActivityOptions options = ActivityOptions.makeBasic();
-            options.setPendingIntentBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-            );
+            // Only the creator mode may be set while building the pending intent.
+            // AlarmManager sends it, so the sender mode is left unset.
             options.setPendingIntentCreatorBackgroundActivityStartMode(
                 ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
             );

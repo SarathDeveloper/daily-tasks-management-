@@ -1,5 +1,7 @@
 package com.ksan.dailytasks;
 
+import android.app.ActivityOptions;
+import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -15,11 +17,7 @@ public class DayflowAlarmReceiver extends BroadcastReceiver {
         Intent activity = new Intent(context, DayflowRingActivity.class);
         activity.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         copyExtras(intent, activity);
-        try {
-            context.startActivity(activity);
-        } catch (Exception ignored) {
-            // The service notification's full-screen intent is the fallback.
-        }
+        openRingScreen(context, activity);
         Intent service = new Intent(context, DayflowRingService.class);
         service.setAction(DayflowRingService.ACTION_START);
         copyExtras(intent, service);
@@ -27,6 +25,37 @@ public class DayflowAlarmReceiver extends BroadcastReceiver {
             context.startForegroundService(service);
         } else {
             context.startService(service);
+        }
+    }
+
+    private static void openRingScreen(Context context, Intent activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ActivityOptions created = ActivityOptions.makeBasic();
+            created.setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            );
+            PendingIntent pending = PendingIntent.getActivity(
+                context,
+                70,
+                activity,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
+                created.toBundle()
+            );
+            ActivityOptions sent = ActivityOptions.makeBasic();
+            sent.setPendingIntentBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            );
+            try {
+                pending.send(sent.toBundle());
+                return;
+            } catch (PendingIntent.CanceledException ignored) {
+                // Fall through to a direct start.
+            }
+        }
+        try {
+            context.startActivity(activity);
+        } catch (Exception ignored) {
+            // The service notification's full-screen intent is the fallback.
         }
     }
 

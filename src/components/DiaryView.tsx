@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import type { DiaryEntry, DiaryMood } from '../types';
 import { formatClockTime, formatLongDate } from '../lib/dateFormat';
-import { diaryMoodColor, diaryMoodLabel, groupDiaryByDate, searchDiaryEntries } from '../lib/diary';
+import { diaryMoodColor, diaryMoodLabel, groupDiaryByDate, sanitizeDiaryImages, searchDiaryEntries } from '../lib/diary';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 
@@ -13,6 +13,34 @@ interface DiaryViewProps {
   onEdit: (entry: DiaryEntry) => void;
   onDelete: (id: string) => void;
 }
+
+export const DiaryPhotoStrip: React.FC<{
+  images: { id: string; dataUrl: string }[];
+  onPreview?: (url: string) => void;
+  size?: 'sm' | 'md';
+}> = ({ images, onPreview, size = 'md' }) => {
+  if (images.length === 0) return null;
+  const frame = size === 'sm' ? 'h-10 w-10' : 'h-24 w-full';
+  return (
+    <div className={`mt-2 grid gap-2 ${size === 'sm' ? 'grid-cols-4' : 'grid-cols-3'}`}>
+      {images.map((image) =>
+        onPreview ? (
+          <button
+            key={image.id}
+            type="button"
+            onClick={() => onPreview(image.dataUrl)}
+            aria-label="View photo"
+            className="overflow-hidden rounded-xl"
+          >
+            <img src={image.dataUrl} alt="" className={`${frame} object-cover bg-slate-100 dark:bg-slate-800`} />
+          </button>
+        ) : (
+          <img key={image.id} src={image.dataUrl} alt="" className={`${frame} rounded-xl object-cover bg-slate-100 dark:bg-slate-800`} />
+        )
+      )}
+    </div>
+  );
+};
 
 export const DiaryMoodChip: React.FC<{ mood: DiaryMood }> = ({ mood }) => (
   <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${diaryMoodColor(mood).soft}`}>
@@ -28,6 +56,7 @@ export const DiaryView: React.FC<DiaryViewProps> = ({
   onDelete,
 }) => {
   const [query, setQuery] = useState('');
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const searching = query.trim().length > 0;
   const groups = useMemo(
     () => groupDiaryByDate(searchDiaryEntries(entries, query)),
@@ -110,6 +139,7 @@ export const DiaryView: React.FC<DiaryViewProps> = ({
             highlighted
             onEdit={onEdit}
             onDelete={onDelete}
+            onPreview={setPreviewUrl}
           />
         )}
         {(searching ? groups : otherGroups).map((group) => (
@@ -120,9 +150,20 @@ export const DiaryView: React.FC<DiaryViewProps> = ({
             highlighted={!searching && group.date === selectedDate}
             onEdit={onEdit}
             onDelete={onDelete}
+            onPreview={setPreviewUrl}
           />
         ))}
       </div>
+      {previewUrl && (
+        <button
+          type="button"
+          aria-label="Close photo"
+          onClick={() => setPreviewUrl(null)}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4"
+        >
+          <img src={previewUrl} alt="" className="max-h-[85dvh] max-w-full rounded-2xl object-contain" />
+        </button>
+      )}
     </div>
   );
 };
@@ -133,7 +174,8 @@ const DiaryDayGroup: React.FC<{
   highlighted?: boolean;
   onEdit: (entry: DiaryEntry) => void;
   onDelete: (id: string) => void;
-}> = ({ date, entries, highlighted, onEdit, onDelete }) => (
+  onPreview: (url: string) => void;
+}> = ({ date, entries, highlighted, onEdit, onDelete, onPreview }) => (
   <section id={`diary-day-${date}`} className="space-y-2">
     <h3 className={`text-xs font-bold uppercase tracking-wide ${
       highlighted ? 'text-indigo-600 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'
@@ -149,9 +191,12 @@ const DiaryDayGroup: React.FC<{
                 <DiaryMoodChip mood={entry.mood} />
                 <span className="text-xs font-semibold text-slate-400">{formatClockTime(entry.time)}</span>
               </div>
-              <p className="mt-2 text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap break-words">
-                {entry.body}
-              </p>
+              {entry.body ? (
+                <p className="mt-2 text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap break-words">
+                  {entry.body}
+                </p>
+              ) : null}
+              <DiaryPhotoStrip images={sanitizeDiaryImages(entry.images)} onPreview={onPreview} />
             </div>
             <div className="flex shrink-0 gap-1">
               <button

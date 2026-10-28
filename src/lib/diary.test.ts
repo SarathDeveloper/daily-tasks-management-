@@ -3,6 +3,7 @@ import type { DiaryEntry } from '../types';
 import {
   diaryPreview,
   groupDiaryByDate,
+  sanitizeDiaryImages,
   searchDiaryEntries,
   sortDiaryEntries,
   validateDiaryDraft,
@@ -21,7 +22,7 @@ const entry = (over: Partial<DiaryEntry> = {}): DiaryEntry => ({
   ...over,
 });
 
-const draft = (over: Partial<{ date: string; time: string; mood: string; body: string }> = {}) => ({
+const draft = (over: Partial<{ date: string; time: string; mood: string; body: string; imageCount: number }> = {}) => ({
   date: '2026-10-02',
   time: '09:15',
   mood: 'okay',
@@ -34,8 +35,13 @@ describe('validateDiaryDraft', () => {
     expect(validateDiaryDraft(draft())).toBeNull();
   });
 
-  it('rejects an empty note', () => {
-    expect(validateDiaryDraft(draft({ body: '   ' }))).toBe('Write a note before saving.');
+  it('rejects an empty note with no photo', () => {
+    expect(validateDiaryDraft(draft({ body: '   ' }))).toBe('Write a note or add a photo before saving.');
+  });
+
+  it('accepts a photo without text and refuses a fifth photo', () => {
+    expect(validateDiaryDraft(draft({ body: '  ', imageCount: 1 }))).toBeNull();
+    expect(validateDiaryDraft(draft({ imageCount: 5 }))).toBe('A note can hold up to 4 photos.');
   });
 
   it('rejects a bad date, time, or mood', () => {
@@ -72,6 +78,18 @@ describe('diary collections', () => {
   it('searches note text and ignores blank queries', () => {
     expect(searchDiaryEntries(notes, '  walk ').map((note) => note.id)).toEqual(['early']);
     expect(searchDiaryEntries(notes, '   ')).toHaveLength(notes.length);
+  });
+
+  it('keeps only real photo data and at most four', () => {
+    const photos = sanitizeDiaryImages([
+      { id: 'a', dataUrl: 'data:image/jpeg;base64,aaa' },
+      { id: '', dataUrl: 'data:image/jpeg;base64,nope' },
+      { id: 'b', dataUrl: 'https://example.com/photo.jpg' },
+      { id: 'c', dataUrl: 'data:image/png;base64,ccc' },
+      { id: 'd', dataUrl: 'data:image/jpeg;base64,ddd' },
+      { id: 'e', dataUrl: 'data:image/jpeg;base64,eee' },
+    ]);
+    expect(photos.map((photo) => photo.id)).toEqual(['a', 'c', 'd', 'e']);
   });
 
   it('previews the first line', () => {

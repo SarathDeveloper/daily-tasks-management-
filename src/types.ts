@@ -177,6 +177,12 @@ export interface HabitCheckInPatch {
 
 export type DiaryMood = 'great' | 'good' | 'okay' | 'low' | 'rough';
 
+/** A photo kept on a diary note, already resized to a JPEG data URL. */
+export interface DiaryImage {
+  id: string;
+  dataUrl: string;
+}
+
 /** One note. A calendar day can hold many of these. */
 export interface DiaryEntry {
   id: string;
@@ -185,6 +191,7 @@ export interface DiaryEntry {
   time: string; // HH:mm
   mood: DiaryMood;
   body: string;
+  images?: DiaryImage[];
   createdAt: string;
   updatedAt: string;
 }

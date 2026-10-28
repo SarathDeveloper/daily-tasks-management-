@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
-import { BookOpen, X } from 'lucide-react';
-import type { DiaryEntry, DiaryMood } from '../types';
-import { DIARY_MOODS, currentTimeString, diaryMoodColor, validateDiaryDraft } from '../lib/diary';
+import { BookOpen, ImagePlus, X } from 'lucide-react';
+import type { DiaryEntry, DiaryImage, DiaryMood } from '../types';
+import { DIARY_MOODS, MAX_DIARY_IMAGES, currentTimeString, diaryMoodColor, sanitizeDiaryImages, validateDiaryDraft } from '../lib/diary';
+import { compressDiaryImage } from '../lib/diaryImages';
 import { Button } from './ui/Button';
 
 interface DiaryEntryModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (entry: Partial<DiaryEntry>) => void;
+  onSave: (entry: Partial<DiaryEntry>) => boolean | void;
   initialEntry?: DiaryEntry | null;
   defaultDate: string;
 }
@@ -23,6 +24,8 @@ export const DiaryEntryModal: React.FC<DiaryEntryModalProps> = ({
   const [time, setTime] = useState(initialEntry?.time ?? currentTimeString());
   const [mood, setMood] = useState<DiaryMood>(initialEntry?.mood ?? 'okay');
   const [body, setBody] = useState(initialEntry?.body ?? '');
+  const [images, setImages] = useState<DiaryImage[]>(() => sanitizeDiaryImages(initialEntry?.images));
+  const [addingPhotos, setAddingPhotos] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const formKey = `${isOpen ? 'open' : 'closed'}:${initialEntry?.id ?? 'new'}:${defaultDate}`;
   const [appliedKey, setAppliedKey] = useState(formKey);
@@ -33,26 +36,56 @@ export const DiaryEntryModal: React.FC<DiaryEntryModalProps> = ({
       setTime(initialEntry?.time ?? currentTimeString());
       setMood(initialEntry?.mood ?? 'okay');
       setBody(initialEntry?.body ?? '');
+      setImages(sanitizeDiaryImages(initialEntry?.images));
+      setAddingPhotos(false);
       setError(null);
     }
   }
 
   if (!isOpen) return null;
 
+  const handlePickPhotos = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []) as File[];
+    event.target.value = '';
+    if (files.length === 0) return;
+    const room = MAX_DIARY_IMAGES - images.length;
+    if (room <= 0) {
+      setError(`A note can hold up to ${MAX_DIARY_IMAGES} photos.`);
+      return;
+    }
+    setAddingPhotos(true);
+    setError(null);
+    const added: DiaryImage[] = [];
+    try {
+      for (const file of files.slice(0, room)) {
+        added.push(await compressDiaryImage(file));
+      }
+      setImages((current) => [...current, ...added].slice(0, MAX_DIARY_IMAGES));
+      if (files.length > room) setError(`A note can hold up to ${MAX_DIARY_IMAGES} photos.`);
+    } catch (pickError) {
+      setError(pickError instanceof Error ? pickError.message : "Couldn't read that photo.");
+    } finally {
+      setAddingPhotos(false);
+    }
+  };
+
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const message = validateDiaryDraft({ date, time, mood, body });
+    if (addingPhotos) return;
+    const message = validateDiaryDraft({ date, time, mood, body, imageCount: images.length });
     if (message) {
       setError(message);
       return;
     }
-    onSave({
+    const saved = onSave({
       id: initialEntry?.id,
       date,
       time,
       mood,
       body: body.trim(),
+      images,
     });
+    if (saved === false) return;
     onClose();
   };
 
@@ -146,6 +179,42 @@ export const DiaryEntryModal: React.FC<DiaryEntryModalProps> = ({
             />
           </div>
 
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Photos</span>
+              <span className="text-[11px] text-slate-400">{images.length} of {MAX_DIARY_IMAGES}</span>
+            </div>
+            {images.length > 0 && (
+              <div className="grid grid-cols-4 gap-2 mb-2">
+                {images.map((image) => (
+                  <div key={image.id} className="relative">
+                    <img src={image.dataUrl} alt="" className="h-16 w-full rounded-xl object-cover bg-slate-100 dark:bg-slate-800" />
+                    <button
+                      type="button"
+                      onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}
+                      aria-label="Remove photo"
+                      className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-slate-900/80 text-white"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label className={`relative inline-flex min-h-[40px] items-center gap-2 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-200 ${images.length >= MAX_DIARY_IMAGES || addingPhotos ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}`}>
+              <ImagePlus className="h-4 w-4" />
+              {addingPhotos ? 'Adding photo...' : 'Add photo'}
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                className="absolute inset-0 cursor-pointer opacity-0"
+                disabled={images.length >= MAX_DIARY_IMAGES || addingPhotos}
+                onChange={(event) => void handlePickPhotos(event)}
+              />
+            </label>
+          </div>
+
           {error && (
             <p className="text-xs font-semibold text-rose-600 dark:text-rose-400">{error}</p>
           )}
@@ -154,7 +223,7 @@ export const DiaryEntryModal: React.FC<DiaryEntryModalProps> = ({
             <Button type="button" variant="secondary" size="sm" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" size="sm" disabled={!body.trim()}>
+            <Button type="submit" variant="primary" size="sm" disabled={addingPhotos || (!body.trim() && images.length === 0)}>
               Save
             </Button>
           </div>

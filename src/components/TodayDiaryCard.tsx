@@ -2,9 +2,9 @@ import React, { useMemo } from 'react';
 import { BookOpen } from 'lucide-react';
 import type { DiaryEntry } from '../types';
 import { formatClockTime } from '../lib/dateFormat';
-import { diaryPreview, sortDiaryEntries } from '../lib/diary';
+import { diaryPreview, sanitizeDiaryImages, sortDiaryEntries } from '../lib/diary';
 import { Card } from './ui/Card';
-import { DiaryMoodChip } from './DiaryView';
+import { DiaryMoodChip, DiaryPhotoStrip } from './DiaryView';
 
 interface TodayDiaryCardProps {
   date: string;
@@ -42,9 +42,12 @@ export const TodayDiaryCard: React.FC<TodayDiaryCardProps> = ({ date, entries, o
               <DiaryMoodChip mood={latest.mood} />
               <span className="text-xs font-semibold text-slate-400">{formatClockTime(latest.time)}</span>
             </div>
-            <p className="mt-1.5 text-sm text-slate-800 dark:text-slate-100 line-clamp-2">
-              {diaryPreview(latest.body, 140)}
-            </p>
+            {latest.body ? (
+              <p className="mt-1.5 text-sm text-slate-800 dark:text-slate-100 line-clamp-2">
+                {diaryPreview(latest.body, 140)}
+              </p>
+            ) : null}
+            <DiaryPhotoStrip images={sanitizeDiaryImages(latest.images).slice(0, 1)} size="sm" />
           </button>
         ) : (
           <button type="button" onClick={onOpen} className="w-full text-left text-sm text-slate-500 dark:text-slate-400">
@@ -55,3 +58,4 @@ export const TodayDiaryCard: React.FC<TodayDiaryCardProps> = ({ date, entries, o
     </section>
   );
 };
+

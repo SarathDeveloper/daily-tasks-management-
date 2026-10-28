@@ -43,7 +43,7 @@ import {
   resolveSavingsDestinationId,
 } from './lib/savingsLedger';
 import { checkBudgetAlerts, formatAlertMessage } from './lib/budgetAlerts';
-import { currentTimeString, diaryPreview, isDiaryMood, validateDiaryDraft } from './lib/diary';
+import { currentTimeString, diaryCollectionFits, diaryPreview, isDiaryMood, sanitizeDiaryImages, validateDiaryDraft } from './lib/diary';
 import { DEFAULT_PAYMENT_METHOD } from './data/financeCategories';
 import {
   buildAtmFee,
@@ -1688,24 +1688,26 @@ export default function App() {
     setIsDiaryModalOpen(true);
   };
 
-  const handleSaveDiaryEntry = (partial: Partial<DiaryEntry>) => {
+  const handleSaveDiaryEntry = (partial: Partial<DiaryEntry>): boolean => {
     const mood = partial.mood && isDiaryMood(partial.mood) ? partial.mood : 'okay';
+    const images = sanitizeDiaryImages(partial.images);
     const draft = {
       date: partial.date || selectedDate,
       time: partial.time || currentTimeString(),
       mood,
       body: partial.body || '',
+      imageCount: images.length,
     };
     const error = validateDiaryDraft(draft);
     if (error) {
       window.alert(error);
-      return;
+      return false;
     }
     const now = new Date().toISOString();
     const savedMood = draft.mood as DiaryMood;
-    if (partial.id) {
-      setDiaryEntries((prev) =>
-        prev.map((entry) =>
+    const savedImages = images.length > 0 ? images : undefined;
+    const next = partial.id
+      ? diaryEntries.map((entry) =>
           entry.id === partial.id
             ? {
                 ...entry,
@@ -1713,24 +1715,31 @@ export default function App() {
                 time: draft.time,
                 mood: savedMood,
                 body: draft.body.trim(),
+                images: savedImages,
                 updatedAt: now,
               }
             : entry
         )
-      );
-      return;
+      : [
+          {
+            id: newLedgerId('diary'),
+            userId: currentUser?.id,
+            date: draft.date,
+            time: draft.time,
+            mood: savedMood,
+            body: draft.body.trim(),
+            images: savedImages,
+            createdAt: now,
+            updatedAt: now,
+          },
+          ...diaryEntries,
+        ];
+    if (!diaryCollectionFits(next)) {
+      window.alert('These photos use more space than this device can keep. Remove a photo and try again.');
+      return false;
     }
-    const created: DiaryEntry = {
-      id: newLedgerId('diary'),
-      userId: currentUser?.id,
-      date: draft.date,
-      time: draft.time,
-      mood: savedMood,
-      body: draft.body.trim(),
-      createdAt: now,
-      updatedAt: now,
-    };
-    setDiaryEntries((prev) => [created, ...prev]);
+    setDiaryEntries(next);
+    return true;
   };
 
   const handleDeleteDiaryEntry = (id: string) => {

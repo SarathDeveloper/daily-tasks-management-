@@ -19,7 +19,7 @@ import {
   Task,
 } from '../types';
 import { formatClockTime } from '../lib/dateFormat';
-import { diaryPreview, sortDiaryEntries } from '../lib/diary';
+import { diaryPreview, sanitizeDiaryImages, sortDiaryEntries } from '../lib/diary';
 import { habitBlockReason, isComplete, isScheduledOn } from '../lib/habits';
 import { habitColor } from '../lib/habitStyle';
 import { formatRupees } from '../lib/money';
@@ -342,7 +342,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Notes</h4>
             {selectedNotes.length ? (
               <div className="space-y-1">
-                {selectedNotes.map((note) => (
+                {selectedNotes.map((note) => {
+                  const photo = sanitizeDiaryImages(note.images)[0];
+                  return (
                   <button
                     key={note.id}
                     type="button"
@@ -350,12 +352,20 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     className="flex min-h-10 w-full items-center gap-2 rounded-xl px-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60"
                   >
                     <DiaryMoodChip mood={note.mood} />
+                    {photo && (
+                      <img
+                        src={photo.dataUrl}
+                        alt=""
+                        className="h-8 w-8 shrink-0 rounded-lg object-cover"
+                      />
+                    )}
                     <span className="min-w-0 flex-1 truncate text-sm text-slate-800 dark:text-slate-100">
-                      {diaryPreview(note.body)}
+                      {diaryPreview(note.body) || (photo ? 'Photo' : '')}
                     </span>
                     <span className="shrink-0 text-xs text-slate-400">{formatClockTime(note.time)}</span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             ) : <p className="text-sm text-slate-400">No notes yet.</p>}
           </section>
