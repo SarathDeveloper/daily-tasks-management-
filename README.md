@@ -167,7 +167,17 @@ Everything else works without environment variables. To enable cloud backup:
 1. Google Cloud Console -> enable **Google Drive API**.
 2. OAuth consent screen -> External -> add your Gmail as a test user.
 3. Create an OAuth client of type **Web application**; copy the client id into
-   `.env`.
+   `.env` and into the host's `VITE_GOOGLE_CLIENT_ID` build variable. On that
+   same Web client, add every origin you sign in from — `http://localhost:3000`
+   and the deployed site, such as `https://your-app.vercel.app` — to **both**
+   Authorized JavaScript origins and Authorized redirect URIs. Use the origin
+   only, with no path and no trailing slash. That is the exact `redirect_uri`
+   the app sends (`window.location.origin`). A `redirect_uri_mismatch` error
+   means that origin is missing. Copy it from the Google error page’s **error
+   details**, not from the `accounts.google.com` address bar. A trailing slash
+   is a different URI and will still be rejected. Preview URLs
+   (`*-git-*.vercel.app`) are separate origins. The Android client cannot
+   be used for the website.
 4. Create an OAuth client of type **Android** with package
    `com.dayflow.dailytasks` and the keystore SHA-1 above.
 5. Rebuild. The only scope requested is
