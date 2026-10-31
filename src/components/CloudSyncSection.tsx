@@ -1,15 +1,18 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  CheckCircle2,
   Cloud,
   CloudOff,
   Loader2,
   LogOut,
   RefreshCw,
   ShieldCheck,
+  XCircle,
 } from 'lucide-react';
 import { Button } from './ui/Button';
 import { cn } from '../lib/cn';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
+import type { DriveCheckStep } from '../services/driveSyncService';
 
 interface CloudSyncSectionProps {
   sync: CloudSyncApi;
@@ -30,6 +33,31 @@ function formatRelative(iso: string | null): string {
 export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
   const { status, account, lastSyncedAt, error, configured } = sync;
   const isBusy = status === 'syncing' || status === 'connecting';
+  const [checking, setChecking] = useState(false);
+  const [checks, setChecks] = useState<DriveCheckStep[] | null>(null);
+
+  // A result from the previous account would be misleading after a reconnect.
+  useEffect(() => {
+    if (!account) setChecks(null);
+  }, [account]);
+
+  const runCheck = async () => {
+    setChecking(true);
+    setChecks(null);
+    try {
+      setChecks(await sync.testConnection());
+    } catch (e) {
+      setChecks([
+        {
+          step: 'Connection test',
+          ok: false,
+          message: e instanceof Error ? e.message : String(e),
+        },
+      ]);
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const statusLine = (() => {
     if (!configured) return 'Not configured for this build.';
@@ -138,6 +166,20 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
                 <span>Restore from cloud</span>
               </Button>
 
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void runCheck()}
+                disabled={isBusy || checking}
+              >
+                {checking ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                )}
+                <span>Test connection</span>
+              </Button>
+
               <Button size="sm" variant="danger" onClick={() => void sync.disconnect()} disabled={isBusy}>
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Disconnect</span>
@@ -145,6 +187,26 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
             </>
           )}
         </div>
+      )}
+
+      {checks && (
+        <ul className="space-y-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5">
+          {checks.map((check, index) => (
+            <li key={`${check.step}-${index}`} className="flex items-start gap-1.5 text-[11px]">
+              {check.ok ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-px" />
+              ) : (
+                <XCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0 mt-px" />
+              )}
+              <span className="text-slate-600 dark:text-slate-300 break-words">
+                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                  {check.step}:
+                </span>{' '}
+                {check.message}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
 
       {configured && (

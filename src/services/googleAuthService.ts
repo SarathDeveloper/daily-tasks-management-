@@ -1,22 +1,32 @@
 /**
  * Google sign-in for Drive backup.
  *
- * The browser asks for full Drive access so the backup can live in a normal
- * Dayflow folder. No backend exists, so the access token is the only credential;
- * it is cached with an expiry and used until it runs out, after which the user
- * reconnects with one tap.
+ * The app asks for `drive.file`, which covers files this app creates without
+ * being a restricted scope. A restricted scope (`drive`) forces Google
+ * verification and, for an External app in Testing, is refused outright, which
+ * left the token unable to list or create anything. No backend exists, so the
+ * access token is the only credential; it is cached with an expiry, renewed
+ * silently when possible, and otherwise the user reconnects with one tap.
  */
 import { GoogleSignIn } from '@capawesome/capacitor-google-sign-in';
 import { hasOAuthRedirectResult, oauthHashError } from '../lib/oauthRedirect';
 import { isNative } from '../lib/platform';
 
 /**
- * Full Drive access so the website and the phone — different OAuth clients —
- * can open the same Dayflow folder. `drive.appdata` is a hidden folder that
- * those two clients do not share, so a backup stored there never shows up in
- * Drive and never arrives on the other device.
+ * Non-sensitive scope: grants read/write to files this app creates, including
+ * a visible `Dayflow` folder in My Drive. Both the web client and the APK use
+ * this same scope, so they land on the same file.
  */
-export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
+export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+/** Broad Drive scope. Only an already-consented token would carry it. */
+const DRIVE_FULL_SCOPE = 'https://www.googleapis.com/auth/drive';
+
+/** Scope needed only to read the old hidden app-data folder during migration. */
+export const APP_DATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+
+/** Any of these can create and update the visible backup file. */
+const DRIVE_WRITE_SCOPES = [DRIVE_SCOPE, DRIVE_FULL_SCOPE];
 const WEB_SCOPES = ['openid', 'email', 'profile', DRIVE_SCOPE].join(' ');
 const ACCOUNT_KEY = 'daily_tasks_google_account_v1';
 const TOKEN_KEY = 'daily_tasks_google_token_v1';
@@ -149,7 +159,7 @@ export function describeGoogleAuthFailure(error: unknown): string {
     lower.includes('unregistered_on_api_console') ||
     lower.includes('developer_error')
   ) {
-    return `${message} Add an Android OAuth client for package com.dayflow.dailytasks and this APK’s signing certificate.`;
+    return `${message} Google has no Android OAuth client for package com.dayflow.dailytasks and this APK's signing certificate. A debug build signs with a different key than a release build, so each needs its own Android client.`;
   }
   if (lower.includes('invalid_scope')) {
     return `${message} In Google Cloud Console, add ${DRIVE_SCOPE} to the OAuth consent screen, then reconnect.`;
@@ -236,10 +246,27 @@ function grantedScopes(scopeField: string | undefined): string[] {
 }
 
 function hasDriveScope(scopes: string[] | undefined): boolean {
-  return Boolean(scopes?.includes(DRIVE_SCOPE));
+  if (!scopes || scopes.length === 0) return false;
+  return DRIVE_WRITE_SCOPES.some((scope) => scopes.includes(scope));
+}
+
+/** True when a granted-scope list includes the hidden app-data folder. */
+export function hasAppDataScope(scopes: string[] | undefined): boolean {
+  if (!scopes || scopes.length === 0) return false;
+  return scopes.includes(APP_DATA_SCOPE) || scopes.includes(DRIVE_FULL_SCOPE);
+}
+
+/** Scopes granted to the cached token; empty when there is no usable token. */
+export function getCachedTokenScopes(): string[] {
+  const cached = readCachedToken();
+  if (!cached || Date.now() >= cached.expiresAt) return [];
+  return cached.scopes ?? [];
 }
 
 let gisPromise: Promise<void> | null = null;
+/** Minimum gap between silent renewal attempts, so a background pull cannot spam Google. */
+const SILENT_RENEW_COOLDOWN_MS = 30_000;
+let lastSilentRenewAt = 0;
 
 function loadGisScript(): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve();
@@ -267,7 +294,12 @@ export function preloadGoogleSignIn(): void {
   });
 }
 
-function requestDriveAccessToken(): Promise<GoogleTokenResponse> {
+interface TokenRequestOptions {
+  /** `consent` forces the picker; empty string asks for a silent renewal. */
+  prompt?: string;
+}
+
+function requestDriveAccessToken(options: TokenRequestOptions = {}): Promise<GoogleTokenResponse> {
   return new Promise((resolve, reject) => {
     const oauth = window.google?.accounts?.oauth2;
     if (!oauth) {
@@ -306,7 +338,7 @@ function requestDriveAccessToken(): Promise<GoogleTokenResponse> {
         reject(new GoogleAuthError('SIGN_IN_FAILED', error.message || 'Google sign-in failed.'));
       },
     });
-    client.requestAccessToken({ prompt: 'consent' });
+    client.requestAccessToken({ prompt: options.prompt ?? 'consent' });
   });
 }
 
@@ -392,6 +424,59 @@ export async function connectGoogleAccount(): Promise<GoogleAccount> {
       throw new GoogleAuthError('CANCELED', 'Sign-in was cancelled.');
     }
     throw new GoogleAuthError('SIGN_IN_FAILED', message);
+  }
+}
+
+/** Renews the cached token without user interaction where the platform allows it. */
+export async function refreshAccessTokenSilently(): Promise<string | null> {
+  if (!isGoogleSignInConfigured()) return null;
+  // The native plugin has no silent refresh: picking an account needs the user.
+  if (isNativePlatform()) return null;
+  // A background pull runs every minute; without a cooldown a rejected silent
+  // renewal would try to open a Google window that many times over.
+  const now = Date.now();
+  if (now - lastSilentRenewAt < SILENT_RENEW_COOLDOWN_MS) return null;
+  lastSilentRenewAt = now;
+  try {
+    await loadGisScript();
+    const token = await requestDriveAccessToken({ prompt: '' });
+    if (!token.access_token) return null;
+    const scopes = grantedScopes(token.scope);
+    if (scopes.length > 0 && !hasDriveScope(scopes)) return null;
+    storeAccessToken(
+      token.access_token,
+      token.expires_in,
+      hasDriveScope(scopes) ? scopes : [DRIVE_SCOPE]
+    );
+    return token.access_token;
+  } catch {
+    // A silent renewal that needs interaction is not an error worth surfacing;
+    // the caller falls back to asking the user to reconnect.
+    return null;
+  }
+}
+
+/**
+ * Returns a usable Drive token.
+ *
+ * Renewal is attempted only when `allowInteractive` is set, because both paths
+ * can show Google UI: on web the token client opens a window when the user has
+ * not already granted access, and on Android the plugin always shows the
+ * account picker. A background pull must therefore never call this with
+ * `allowInteractive`, or the app would throw Google windows at the user.
+ */
+export async function ensureAccessToken(
+  options: { allowInteractive?: boolean } = {}
+): Promise<string | null> {
+  const cached = getCachedAccessToken();
+  if (cached) return cached;
+  if (!options.allowInteractive) return null;
+  if (!isNativePlatform()) return refreshAccessTokenSilently();
+  try {
+    await connectGoogleAccount();
+    return getCachedAccessToken();
+  } catch {
+    return null;
   }
 }
 

@@ -28,6 +28,9 @@ import {
   loadCloudSnapshot,
   saveCloudSnapshot,
   snapshotsMatch,
+  testDriveConnection,
+  type CloudSnapshot,
+  type DriveCheckStep,
 } from '../services/driveSyncService';
 import {
   GoogleAuthError,
@@ -37,9 +40,12 @@ import {
   connectGoogleAccount,
   describeGoogleAuthFailure,
   disconnectGoogleAccount,
-  getCachedAccessToken,
+  ensureAccessToken,
+  getCachedTokenScopes,
   getStoredAccount,
+  hasAppDataScope,
   hasPendingRedirectAccount,
+  hasValidToken,
   isGoogleSignInConfigured,
   isNativePlatform,
   preloadGoogleSignIn,
@@ -76,11 +82,15 @@ export interface CloudSyncApi {
   disconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
   restoreFromCloud: () => Promise<void>;
+  /** Walks the Drive steps and reports which one fails. */
+  testConnection: () => Promise<DriveCheckStep[]>;
 }
 
 type SyncMode = 'merge' | 'restore';
 
 const AUTO_SYNC_DEBOUNCE_MS = 4000;
+/** How often an open browser tab checks Drive for edits made elsewhere. */
+const WEB_PULL_INTERVAL_MS = 60_000;
 /** After the Google sheet closes, wait briefly for the plugin result before giving up. */
 const CONNECT_RESUME_GRACE_MS = 2000;
 
@@ -94,7 +104,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   const [account, setAccount] = useState<GoogleAccount | null>(() => getStoredAccount());
   const [status, setStatus] = useState<CloudSyncStatus>(() => {
     if (!isGoogleSignInConfigured()) return 'unconfigured';
-    if (getStoredAccount()) return getCachedAccessToken() ? 'idle' : 'needs-auth';
+    if (getStoredAccount()) return hasValidToken() ? 'idle' : 'needs-auth';
     return bootNotice ? 'error' : 'disconnected';
   });
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(
@@ -104,6 +114,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
 
   const busyRef = useRef(false);
   const pendingModeRef = useRef<SyncMode | null>(null);
+  const pendingInteractiveRef = useRef(false);
   const connectingRef = useRef(false);
   const connectGeneration = useRef(0);
   const keysRef = useRef<StorageKeys>(keys);
@@ -142,10 +153,11 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   }, []);
 
   const runSync = useCallback(
-    async (mode: SyncMode, opts: { silent?: boolean } = {}) => {
+    async (mode: SyncMode, opts: { silent?: boolean; allowInteractive?: boolean } = {}) => {
       if (!enabled || !isGoogleSignInConfigured()) return;
       if (busyRef.current) {
         pendingModeRef.current = mode;
+        pendingInteractiveRef.current = pendingInteractiveRef.current || Boolean(opts.allowInteractive);
         return;
       }
 
@@ -156,7 +168,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       }
       setAccount(storedAccount);
 
-      const token = getCachedAccessToken();
+      const token = await ensureAccessToken({ allowInteractive: opts.allowInteractive });
       if (!token) {
         setStatus('needs-auth');
         setError('Reconnect and allow Google Drive access so backups can upload and download.');
@@ -164,13 +176,45 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       }
 
       busyRef.current = true;
-      if (!opts.silent) setError(null);
-      setStatus('syncing');
+      // A background pull must not flip the badge to "Syncing" every minute;
+      // only a sync the user asked for shows progress.
+      if (!opts.silent) {
+        setError(null);
+        setStatus('syncing');
+      }
 
       const storageKeys = keysRef.current;
+      const legacyProfileId = readLegacyDriveProfileId();
+      // The hidden app-data folder is only readable with `drive` or
+      // `drive.appdata`. Under `drive.file` that lookup would 403 every sync.
+      const canReadAppData = hasAppDataScope(getCachedTokenScopes());
+      let activeToken = token;
 
       try {
-        const cloud = await loadCloudSnapshot(token, readLegacyDriveProfileId());
+        // A token can expire mid-sync. Renew once and replay the failed call
+        // rather than dropping the user back to the Connect button. Only a
+        // user-initiated sync may renew, because renewal can show Google UI.
+        const renewToken = async (): Promise<string | null> => {
+          if (!opts.allowInteractive) return null;
+          clearCachedAccessToken();
+          const renewed = await ensureAccessToken({ allowInteractive: true });
+          if (renewed) activeToken = renewed;
+          return renewed;
+        };
+        const withAuthRetry = async <T,>(run: () => Promise<T>): Promise<T> => {
+          try {
+            return await run();
+          } catch (e) {
+            if (!(e instanceof DriveAuthError)) throw e;
+            const renewed = await renewToken();
+            if (!renewed) throw e;
+            return run();
+          }
+        };
+
+        const cloud = await withAuthRetry(() =>
+          loadCloudSnapshot(activeToken, legacyProfileId, { canReadAppData })
+        );
 
         if (mode === 'restore') {
           const pieces = [cloud.visible, ...cloud.hidden].filter((piece): piece is SyncEnvelope => piece !== null);
@@ -182,7 +226,9 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
           }
           applyEnvelope(restored, storageKeys);
           if (!cloud.file || !cloud.visible || !snapshotsMatch(cloud.visible, restored)) {
-            await saveCloudSnapshot(token, cloud.folderId, cloud.file, restored);
+            await withAuthRetry(() =>
+              saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, restored)
+            );
           }
           clearLegacyDriveProfileId();
           setStatus('idle');
@@ -207,7 +253,9 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
           snapshotsMatch(local, merged);
 
         if (!visibleAlreadyMatches) {
-          await saveCloudSnapshot(token, cloud.folderId, cloud.file, merged);
+          await withAuthRetry(() =>
+            saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, merged)
+          );
         }
 
         // Write back when Drive or a one-time hidden file changed this device.
@@ -241,8 +289,12 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       } finally {
         busyRef.current = false;
         const pending = pendingModeRef.current;
+        const pendingInteractive = pendingInteractiveRef.current;
         pendingModeRef.current = null;
-        if (pending) void runSync(pending, { silent: true });
+        pendingInteractiveRef.current = false;
+        if (pending) {
+          void runSync(pending, { silent: true, allowInteractive: pendingInteractive });
+        }
       }
     },
     [applyEnvelope, buildLocalEnvelope, enabled]
@@ -266,7 +318,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
         const stored = accountFromRedirect ?? getStoredAccount();
         if (!stored) return;
         setAccount(stored);
-        if (!getCachedAccessToken()) {
+        if (!hasValidToken()) {
           if (!cancelled) setStatus('needs-auth');
           return;
         }
@@ -277,7 +329,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
         await runSync('merge', { silent: true });
       } catch (e) {
         const stored = getStoredAccount();
-        const linked = Boolean(stored && getCachedAccessToken());
+        const linked = Boolean(stored && hasValidToken());
         if (linked && stored) {
           setAccount(stored);
           setStatus('idle');
@@ -300,10 +352,11 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     };
   }, [configured, runSync]);
 
-  // First sync on launch when a still-valid token is cached.
+  // First sync on launch. runSync now renews an expired token itself, so this
+  // no longer needs a live token to be present.
   useEffect(() => {
     if (!configured || !enabled) return;
-    if (!getStoredAccount() || !getCachedAccessToken()) return;
+    if (!getStoredAccount()) return;
     void runSync('merge', { silent: true });
     // Intentionally only on mount. Later edits go through the revision debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,7 +365,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   // Debounced push after local mutations.
   useEffect(() => {
     if (!configured || !enabled) return;
-    if (!getStoredAccount() || !getCachedAccessToken()) return;
+    if (!getStoredAccount()) return;
     const timer = setTimeout(() => {
       void runSync('merge', { silent: true });
     }, AUTO_SYNC_DEBOUNCE_MS);
@@ -336,6 +389,33 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       };
     });
     return () => remove?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured, enabled]);
+
+  // Web has no appStateChange, so an open tab never noticed phone edits. Pull
+  // when the tab becomes visible, regains focus, comes back online, and once a
+  // minute while it stays visible.
+  useEffect(() => {
+    if (!configured || isNativePlatform() || !enabled) return;
+    if (typeof document === 'undefined') return;
+    const pull = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!getStoredAccount()) return;
+      void runSync('merge', { silent: true });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') pull();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', pull);
+    window.addEventListener('online', pull);
+    const timer = setInterval(pull, WEB_PULL_INTERVAL_MS);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', pull);
+      window.removeEventListener('online', pull);
+      clearInterval(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured, enabled]);
 
@@ -389,7 +469,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       if (generation !== connectGeneration.current) return;
       connectingRef.current = false;
       setAccount(nextAccount);
-      if (!getCachedAccessToken()) {
+      if (!hasValidToken()) {
         setStatus('needs-auth');
         setError('Google did not return a Drive token. Tap Reconnect to try again.');
         return;
@@ -402,12 +482,12 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       connectingRef.current = false;
       if (e instanceof GoogleAuthError && e.code === 'CANCELED') {
         const stored = getStoredAccount();
-        setStatus(stored && getCachedAccessToken() ? 'idle' : stored ? 'needs-auth' : 'disconnected');
+        setStatus(stored && hasValidToken() ? 'idle' : stored ? 'needs-auth' : 'disconnected');
         setError(null);
         return;
       }
       const message = describeGoogleAuthFailure(e);
-      if (getStoredAccount() && getCachedAccessToken()) {
+      if (getStoredAccount() && hasValidToken()) {
         setAccount(getStoredAccount());
         setStatus('idle');
         setError(message);
@@ -426,12 +506,31 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   }, []);
 
   const syncNow = useCallback(async () => {
-    await runSync('merge');
+    // An explicit tap may raise the native account picker when the token
+    // expired; automatic syncs never do.
+    await runSync('merge', { allowInteractive: true });
   }, [runSync]);
 
   const restoreFromCloud = useCallback(async () => {
-    await runSync('restore');
+    await runSync('restore', { allowInteractive: true });
   }, [runSync]);
+
+  const testConnection = useCallback(async (): Promise<DriveCheckStep[]> => {
+    if (!getStoredAccount()) {
+      return [{ step: 'Account', ok: false, message: 'Connect Google Drive first.' }];
+    }
+    const token = await ensureAccessToken({ allowInteractive: true });
+    if (!token) {
+      return [
+        {
+          step: 'Drive access',
+          ok: false,
+          message: 'Google Drive access expired. Tap Reconnect to allow access again.',
+        },
+      ];
+    }
+    return testDriveConnection(token, getCachedTokenScopes());
+  }, []);
 
   return {
     status,
@@ -439,11 +538,12 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
     lastSyncedAt,
     error,
     configured,
-    hasSession: Boolean(account) && getCachedAccessToken() !== null,
+    hasSession: Boolean(account) && hasValidToken(),
     connect,
     disconnect,
     syncNow,
     restoreFromCloud,
+    testConnection,
   };
 }
 

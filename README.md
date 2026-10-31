@@ -7,7 +7,7 @@ It ships two ways from the same codebase:
 - **Web / PWA** — installable from Chrome, offline capable.
 - **Android APK** — a Capacitor shell with real scheduled notifications that fire with the app closed, plus optional Google Drive backup.
 
-All data lives in `localStorage`; there is no backend. Cloud backup is optional and writes a single JSON snapshot to a hidden folder in your own Google Drive.
+All data lives in `localStorage`; there is no backend. Cloud backup is optional and writes a single JSON snapshot to a visible `Dayflow` folder in your own Google Drive.
 
 ## Features
 
@@ -60,7 +60,7 @@ All data lives in `localStorage`; there is no backend. Cloud backup is optional 
 - Hardware back button closes modals before leaving the app
 - Dark splash screen and status bar that follows the theme
 - Reminder reliability diagnostics (notification permission, exact alarms, OEM battery tips)
-- Optional Google sign-in with Drive `appDataFolder` backup and record-level merge
+- Optional Google sign-in with a visible Dayflow Drive backup and record-level merge
 
 ## Tech Stack
 
@@ -70,7 +70,7 @@ All data lives in `localStorage`; there is no backend. Cloud backup is optional 
 - [Motion](https://motion.dev/) for animations
 - [Lucide React](https://lucide.dev/) for icons
 - [Capacitor 8](https://capacitorjs.com/) + `@capacitor/local-notifications`, `app`, `splash-screen`, `status-bar`, `@capawesome/capacitor-google-sign-in`
-- [Google Drive API v3](https://developers.google.com/workspace/drive/api/guides/appdata) via plain `fetch` (no SDK)
+- [Google Drive API v3](https://developers.google.com/workspace/drive/api/guides/api-specific-auth) via plain `fetch` (no SDK), using the `drive.file` scope
 - `localStorage` for all persistence; no server
 
 ## Getting Started
@@ -168,21 +168,50 @@ Everything else works without environment variables. To enable cloud backup:
 2. OAuth consent screen -> External -> add your Gmail as a test user.
 3. Create an OAuth client of type **Web application**; copy the client id into
    `.env` and into the host's `VITE_GOOGLE_CLIENT_ID` build variable. On that
-   same Web client, add every origin you sign in from — `http://localhost:3000`
-   and the deployed site, such as `https://your-app.vercel.app` — to **both**
-   Authorized JavaScript origins and Authorized redirect URIs. Use the origin
-   only, with no path and no trailing slash. That is the exact `redirect_uri`
-   the app sends (`window.location.origin`). A `redirect_uri_mismatch` error
-   means that origin is missing. Copy it from the Google error page’s **error
-   details**, not from the `accounts.google.com` address bar. A trailing slash
-   is a different URI and will still be rejected. Preview URLs
+   same Web client, add every origin you sign in from — `http://127.0.0.1:3000`
+   and the deployed site, `https://daily-tasks-management.vercel.app` — to
+   **both** Authorized JavaScript origins and Authorized redirect URIs. Use the
+   origin only, with no path and no trailing slash. That is the exact
+   `redirect_uri` the app sends (`window.location.origin`). A
+   `redirect_uri_mismatch` error means that origin is missing. Copy it from the
+   Google error page’s **error details**, not from the `accounts.google.com`
+   address bar. A trailing slash is a different URI and will still be rejected.
+   Preview URLs
    (`*-git-*.vercel.app`) are separate origins. The Android client cannot
    be used for the website.
-4. Create an OAuth client of type **Android** with package
-   `com.dayflow.dailytasks` and the keystore SHA-1 above.
+4. Create OAuth clients of type **Android** with package `com.dayflow.dailytasks`.
+   A debug APK and a release APK are signed by different keys, so each needs its
+   own client:
+
+   | Build | Keystore | SHA-1 |
+   | --- | --- | --- |
+   | Release | `dailytasks.keystore` | `60:BF:C7:3D:F4:C3:BB:E2:16:56:BE:4B:A3:19:C3:BE:B0:46:DA:BE` |
+   | Debug (`apk:debug`) | `~/.android/debug.keystore` | `7D:23:5D:0E:BC:B8:78:67:34:BC:DA:E0:7A:87:6D:D0:73:4A:6C:65` |
+
+   Without the fingerprint that matches the installed APK, Android sign-in
+   fails with `Account reauth failed` / `UNREGISTERED_ON_API_CONSOLE`, which
+   Google Play services reports as a cancellation.
 5. Rebuild. The only scope requested is
-   `https://www.googleapis.com/auth/drive.appdata` (non-sensitive: access to a
-   hidden per-app folder only).
+   `https://www.googleapis.com/auth/drive.file` (non-sensitive: read/write to
+   the files this app creates, including the visible `Dayflow` folder). Add that
+   same scope under the consent screen's **Data Access** tab. Do not request the
+   full `https://www.googleapis.com/auth/drive` scope: it is restricted, so
+   Google requires verification and an External app in Testing will not reliably
+   grant it — the symptom is a `403` on the first Drive call that shows up as
+   "Reconnect".
+
+### Drive sync troubleshooting
+
+Cloud settings has a **Test connection** button that names the step that fails.
+The steps it walks are Drive access, the Dayflow folder, and the backup file.
+
+| Symptom | Cause |
+| --- | --- |
+| `redirect_uri_mismatch` | The origin is missing from the Web client's Authorized redirect URIs |
+| "The Google window was blocked" | Pop-ups are blocked for the site |
+| Connects, then flips to "Reconnect" | The token lacks `drive.file`, or a 401 needs one more Reconnect |
+| Android "Account reauth failed" | No Android OAuth client for this APK's signing key |
+| No file in Drive | Nothing has synced yet; press **Sync now** while connected |
 
 ## Project Structure
 
@@ -219,7 +248,7 @@ src/
     notificationService.ts # Browser/PWA notifications (web fallback)
     nativeNotificationService.ts # Android alarms, channels, tap listeners
     googleAuthService.ts   # Google sign-in + token cache
-    driveSyncService.ts    # Drive REST calls for the appDataFolder snapshot
+    driveSyncService.ts    # Drive REST calls for the Dayflow snapshot file
     audioService.ts        # Sound and speech playback
   lib/
     cn.ts                  # className helper
@@ -243,10 +272,11 @@ scripts/
 ## Data and Privacy
 
 - All data is stored in `localStorage` on this device, under one set of keys. There is no local account.
-- Desktop and phone stay in sync by connecting the same Google account. Both write `daily-tasks-sync.json` in Drive's hidden `appDataFolder`. Connect and Sync now merge; Restore replaces this device and drops edits that were never uploaded.
+- Desktop and phone stay in sync by connecting the same Google account. Both write `daily-tasks-sync.json` in a visible `Dayflow` folder in My Drive. Connect and Sync now merge; Restore replaces this device and drops edits that were never uploaded.
 - Clearing app/browser storage erases all tasks and finance data. Use Export JSON or Google Drive backup to keep a copy.
-- Google Drive backup is optional and off until you connect. The app cannot see any other file in your Drive.
-- The Drive access token is cached on the device with a 55-minute expiry so sync keeps working across launches without prompting. Disconnecting clears it. Sync is last-write-wins per record, with deletes tracked for 90 days.
+- Google Drive backup is optional and off until you connect. The `drive.file` scope lets the app read and write only the files it created, so it cannot see the rest of your Drive.
+- The Drive access token is cached on the device with a 55-minute expiry. Background syncs (launch, edits, focus/online, the once-a-minute pull) only ever use that cached token: if it expired they switch to “Reconnect” instead of opening a Google window. Only a tap on Connect, Sync now, Restore, or Test connection may renew it, because renewal can show Google UI. Sync is last-write-wins per record, with deletes tracked for 90 days.
+- An open browser tab pulls changes when it regains focus, comes back online, and once a minute while visible, so an edit on the phone arrives without a reload.
 
 ## License
 

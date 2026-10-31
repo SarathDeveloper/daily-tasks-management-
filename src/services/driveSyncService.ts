@@ -20,6 +20,12 @@ export const SYNC_FILE_NAME = `${SYNC_FILE_BASE}.json`;
 /** Folder created in My Drive so the backup is visible in Google Drive. */
 export const DRIVE_FOLDER_NAME = 'Dayflow';
 
+/** Either of these can create and update the visible backup file. */
+const DRIVE_WRITE_SCOPES = [
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive',
+];
+
 export class DriveAuthError extends Error {
   constructor(message = 'Google Drive access expired.') {
     super(message);
@@ -42,6 +48,40 @@ export class DriveError extends Error {
     this.name = 'DriveError';
     this.status = status;
   }
+}
+
+/** Drive accepted the request but never answered. Retrying later can succeed. */
+export class DriveTimeoutError extends DriveError {
+  constructor(message = 'Google Drive did not answer in time. Check your connection and try Sync now again.') {
+    super(0, message);
+    this.name = 'DriveTimeoutError';
+  }
+}
+
+/** A request must never hang forever: the UI would stay on “Syncing”. */
+const REQUEST_TIMEOUT_MS = 20_000;
+/** Drive occasionally returns these for a request that succeeds on retry. */
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Multipart boundaries only need to be unique, not cryptographic. `randomUUID`
+ * is missing on Android WebViews older than Chrome 92, where calling it throws
+ * and every upload fails, so fall back to random bytes.
+ */
+function randomToken(): string {
+  const cryptoObj = typeof crypto !== 'undefined' ? crypto : undefined;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID().replace(/-/g, '');
+  }
+  if (cryptoObj && typeof cryptoObj.getRandomValues === 'function') {
+    const bytes = cryptoObj.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
 }
 
 export interface DriveFileRef {
@@ -96,8 +136,28 @@ async function driveFetch(
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(url, { ...init, headers });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, headers, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) throw new DriveTimeoutError();
+    throw new DriveError(0, error instanceof Error ? error.message : String(error));
+  } finally {
+    clearTimeout(timer);
+  }
   if (response.status === 401) throw new DriveAuthError();
+  return response;
+}
+
+/** GET-style call that retries once on a transient Drive status. */
+async function driveGet(token: string, url: string): Promise<Response> {
+  let response = await driveFetch(token, url);
+  if (RETRYABLE_STATUSES.has(response.status)) {
+    await sleep(400);
+    response = await driveFetch(token, url);
+  }
   return response;
 }
 
@@ -137,7 +197,7 @@ async function listFiles(
     q: query,
   });
   if (space === 'drive') params.set('orderBy', 'modifiedTime desc');
-  const response = await driveFetch(token, `${DRIVE_API}/files?${params.toString()}`);
+  const response = await driveGet(token, `${DRIVE_API}/files?${params.toString()}`);
   await assertOk(response, 'lookup');
   const body = (await response.json()) as { files?: DriveFileRef[] };
   return body.files ?? [];
@@ -171,7 +231,13 @@ async function createFolder(token: string): Promise<DriveFileRef> {
   return { id: created.id, name: created.name ?? DRIVE_FOLDER_NAME };
 }
 
-/** Finds or creates the My Drive folder that holds the backup. */
+/**
+ * Finds or creates the My Drive folder that holds the backup.
+ *
+ * Under `drive.file`, `files.list` only returns files this app created, which
+ * is exactly the Dayflow folder. Both the web client and the APK live in the
+ * same Cloud project, so they see the same app-created files.
+ */
 export async function ensureDayflowFolder(token: string): Promise<string> {
   const folders = await listFiles(
     token,
@@ -209,29 +275,36 @@ async function readHiddenFile(token: string, name: string): Promise<SyncEnvelope
 /**
  * Reads the visible backup. When that file is missing, also returns hidden
  * copies from the old app-data folder so they can be merged and re-uploaded.
+ *
+ * `canReadAppData` must be false unless the token carries `drive` or
+ * `drive.appdata`; under `drive.file` that listing is a guaranteed 403 and
+ * would fail an otherwise healthy sync.
  */
 export async function loadCloudSnapshot(
   token: string,
-  legacyProfileId?: string | null
+  legacyProfileId?: string | null,
+  options: { canReadAppData?: boolean } = {}
 ): Promise<CloudSnapshot> {
   const folderId = await ensureDayflowFolder(token);
   const file = await findInParent(token, folderId, SYNC_FILE_NAME);
   const visible = file ? await downloadSyncFile(token, file.id) : null;
   const hidden: SyncEnvelope[] = [];
-  if (!visible) {
-    const shared = await readHiddenFile(token, SYNC_FILE_NAME);
-    if (shared) hidden.push(shared);
-  }
-  if (legacyProfileId) {
-    const legacy = await readHiddenFile(token, legacySyncFileName(legacyProfileId));
-    if (legacy) hidden.push(legacy);
+  if (options.canReadAppData) {
+    if (!visible) {
+      const shared = await readHiddenFile(token, SYNC_FILE_NAME);
+      if (shared) hidden.push(shared);
+    }
+    if (legacyProfileId) {
+      const legacy = await readHiddenFile(token, legacySyncFileName(legacyProfileId));
+      if (legacy) hidden.push(legacy);
+    }
   }
   return { folderId, file, visible, hidden };
 }
 
 /** Downloads and validates a Drive file. An unreadable file is ignored. */
 export async function downloadSyncFile(token: string, fileId: string): Promise<SyncEnvelope | null> {
-  const response = await driveFetch(token, `${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`);
+  const response = await driveGet(token, `${DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media`);
   await assertOk(response, 'download');
   let parsed: unknown;
   try {
@@ -264,7 +337,7 @@ async function createSyncFile(
   folderId: string,
   envelope: SyncEnvelope
 ): Promise<string> {
-  const boundary = `dayflow_${crypto.randomUUID().replace(/-/g, '')}`;
+  const boundary = `dayflow_${randomToken()}`;
   const response = await driveFetch(
     token,
     `${DRIVE_UPLOAD}/files?uploadType=multipart&fields=id,name`,
@@ -298,7 +371,7 @@ function mediaPart(envelope: SyncEnvelope, boundary: string, metadata: string): 
 async function writeMedia(token: string, fileId: string, envelope: SyncEnvelope): Promise<void> {
   // Multipart, not a raw JSON body. A plain application/json PATCH is easy for
   // Drive to treat as file metadata, which leaves the backup bytes unchanged.
-  const boundary = `dayflow_${crypto.randomUUID().replace(/-/g, '')}`;
+  const boundary = `dayflow_${randomToken()}`;
   const response = await driveFetch(
     token,
     `${DRIVE_UPLOAD}/files/${encodeURIComponent(fileId)}?uploadType=multipart`,
@@ -325,15 +398,97 @@ export async function saveCloudSnapshot(
   existing: DriveFileRef | null,
   envelope: SyncEnvelope
 ): Promise<void> {
-  const fileId = existing
-    ? existing.id
-    : await createSyncFile(token, folderId, envelope);
-  if (existing) await writeMedia(token, fileId, envelope);
-  const stored = await downloadSyncFile(token, fileId);
-  if (!stored || !snapshotsMatch(stored, envelope)) {
-    throw new DriveError(
-      0,
-      'Google Drive did not store this backup. Sync was not saved.'
-    );
+  // Two devices syncing at once must not create a second copy of the file, so
+  // the folder is re-checked right before creating.
+  const target = existing ?? (await findInParent(token, folderId, SYNC_FILE_NAME));
+  const fileId = target ? target.id : await createSyncFile(token, folderId, envelope);
+  if (target) await writeMedia(token, fileId, envelope);
+
+  // Drive is not always read-after-write consistent, so the verification read
+  // is retried briefly before declaring the upload lost. A just-created file
+  // can also 404 for a moment while it propagates.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const stored = await downloadSyncFile(token, fileId);
+      if (stored && snapshotsMatch(stored, envelope)) return;
+    } catch (error) {
+      const transient =
+        error instanceof DriveError && (error.status === 404 || RETRYABLE_STATUSES.has(error.status));
+      if (!transient || attempt === 2) throw error;
+    }
+    if (attempt < 2) await sleep(300 * (attempt + 1));
   }
+  throw new DriveError(
+    0,
+    'Google Drive did not store this backup. Sync was not saved.'
+  );
+}
+
+export interface DriveCheckStep {
+  step: string;
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * Walks the Drive steps in order so a failure names the stage that broke
+ * instead of leaving the UI on a generic message.
+ *
+ * `scopes` are the scopes Google actually granted. Checked locally first,
+ * because a token without `drive.file` can still answer some Drive calls while
+ * every upload fails.
+ */
+export async function testDriveConnection(
+  token: string,
+  scopes: string[] = []
+): Promise<DriveCheckStep[]> {
+  const steps: DriveCheckStep[] = [];
+  const canWrite = scopes.some((scope) => DRIVE_WRITE_SCOPES.includes(scope));
+
+  if (scopes.length > 0 && !canWrite) {
+    steps.push({
+      step: 'Permission',
+      ok: false,
+      message: `Google granted ${scopes.join(', ')} but not a Drive file scope. Tap Reconnect and allow Google Drive.`,
+    });
+    return steps;
+  }
+  steps.push({
+    step: 'Permission',
+    ok: true,
+    message: canWrite ? 'Drive file access is granted.' : 'Scope was not reported by Google.',
+  });
+
+  let folderId: string;
+  try {
+    folderId = await ensureDayflowFolder(token);
+    steps.push({ step: 'Dayflow folder', ok: true, message: 'Folder is available in My Drive.' });
+  } catch (error) {
+    steps.push({ step: 'Dayflow folder', ok: false, message: errorMessage(error) });
+    return steps;
+  }
+
+  try {
+    const files = await listFiles(
+      token,
+      `name = '${escapeQuery(SYNC_FILE_NAME)}' and '${escapeQuery(folderId)}' in parents and trashed = false`,
+      'drive'
+    );
+    steps.push({
+      step: 'Backup file',
+      ok: true,
+      message: files[0]
+        ? `Found ${SYNC_FILE_NAME} (modified ${files[0].modifiedTime ?? 'unknown'}).`
+        : `${SYNC_FILE_NAME} does not exist yet; the first sync creates it.`,
+    });
+  } catch (error) {
+    steps.push({ step: 'Backup file', ok: false, message: errorMessage(error) });
+  }
+
+  return steps;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }

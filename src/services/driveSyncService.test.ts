@@ -3,12 +3,14 @@ import type { SyncEnvelope } from '../lib/persistence';
 import {
   DriveError,
   DriveScopeError,
+  DriveTimeoutError,
   downloadSyncFile,
   legacySyncFileName,
   loadCloudSnapshot,
   saveCloudSnapshot,
   SYNC_FILE_NAME,
   syncFileNameFor,
+  testDriveConnection,
 } from './driveSyncService';
 
 const snapshot = {
@@ -72,6 +74,9 @@ describe('Drive backup file', () => {
         });
         if (method === 'POST' && url.includes('uploadType=multipart')) return json({ id: 'file-1' });
         if (method === 'GET' && url.includes('/files/file-1')) return json(snapshot);
+        if (method === 'GET' && new URL(url).searchParams.get('q')?.includes('in parents')) {
+          return json({ files: [] });
+        }
         return json({ error: { message: 'unexpected' } }, 500);
       })
     );
@@ -129,10 +134,28 @@ describe('Drive backup file', () => {
       return json({ files: [] });
     });
 
-    const cloud = await loadCloudSnapshot('token-1', null);
+    const cloud = await loadCloudSnapshot('token-1', null, { canReadAppData: true });
     expect(cloud.folderId).toBe('folder-1');
     expect(cloud.file?.id).toBe('file-1');
     expect(cloud.visible?.data.tasks[0]).toMatchObject({ id: 'task-real' });
+    expect(cloud.hidden).toEqual([]);
+    expect(spaces).not.toContain('appDataFolder');
+  });
+
+  it('skips the hidden app folder when the token has no app-data scope', async () => {
+    // `drive.file` cannot list appDataFolder; asking would 403 every sync.
+    const spaces: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      const parsed = new URL(url);
+      const space = parsed.searchParams.get('spaces') ?? '';
+      if (space) spaces.push(space);
+      const query = parsed.searchParams.get('q') ?? '';
+      if (query.includes('mimeType')) return json({ files: [{ id: 'folder-1', name: 'Dayflow' }] });
+      if (query.includes('in parents')) return json({ files: [] });
+      return json({ files: [] });
+    });
+
+    const cloud = await loadCloudSnapshot('token-1', 'usr-1', { canReadAppData: false });
     expect(cloud.hidden).toEqual([]);
     expect(spaces).not.toContain('appDataFolder');
   });
@@ -150,11 +173,80 @@ describe('Drive backup file', () => {
       return json({ files: [] });
     });
 
-    const cloud = await loadCloudSnapshot('token-1', 'usr-1');
+    const cloud = await loadCloudSnapshot('token-1', 'usr-1', { canReadAppData: true });
     expect(cloud.file).toBeNull();
     expect(cloud.visible).toBeNull();
     expect(cloud.hidden).toHaveLength(1);
     expect(cloud.hidden[0].data.tasks[0]).toMatchObject({ title: 'Dayflow task' });
+  });
+
+  it('updates the existing file instead of creating a duplicate', async () => {
+    const methods: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (url.includes('uploadType=multipart')) methods.push(method);
+      if (method === 'GET' && new URL(url).searchParams.get('q')?.includes('in parents')) {
+        return json({ files: [{ id: 'file-1', name: SYNC_FILE_NAME }] });
+      }
+      if (method === 'GET' && url.includes('alt=media')) return json(snapshot);
+      return json({ id: 'file-1' });
+    });
+
+    // `existing` is null, but the folder already holds the file: no second copy.
+    await saveCloudSnapshot('token-1', 'folder-1', null, snapshot);
+    expect(methods).toEqual(['PATCH']);
+  });
+
+  it('retries the verification read when Drive returns the old bytes first', async () => {
+    let reads = 0;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'PATCH') return json({ id: 'file-1' });
+      if (url.includes('alt=media')) {
+        reads += 1;
+        if (reads === 1) return json({ ...snapshot, data: { ...snapshot.data, tasks: [] } });
+        return json(snapshot);
+      }
+      return json({ error: { message: 'unexpected' } }, 500);
+    });
+
+    await expect(
+      saveCloudSnapshot('token-1', 'folder-1', { id: 'file-1', name: SYNC_FILE_NAME }, snapshot)
+    ).resolves.toBeUndefined();
+    expect(reads).toBe(2);
+  });
+
+  it('retries a transient Drive status before failing', async () => {
+    let calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      calls += 1;
+      if (calls === 1) return json({ error: { message: 'backend error' } }, 503);
+      return json(snapshot);
+    });
+
+    await expect(downloadSyncFile('token-1', 'file-1')).resolves.toMatchObject({
+      deviceId: 'device-1',
+    });
+    expect(calls).toBe(2);
+  });
+
+  it('gives up with a timeout instead of hanging forever', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        'fetch',
+        (url: string, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          })
+      );
+
+      const pending = downloadSyncFile('token-1', 'file-1');
+      const assertion = expect(pending).rejects.toBeInstanceOf(DriveTimeoutError);
+      await vi.advanceTimersByTimeAsync(25_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports a missing Drive permission instead of a successful sync', async () => {
@@ -171,5 +263,59 @@ describe('Drive backup file', () => {
     );
 
     await expect(loadCloudSnapshot('token-1', null)).rejects.toBeInstanceOf(DriveScopeError);
+  });
+
+  it('retries the read-back when a new file briefly returns 404', async () => {
+    let reads = 0;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'POST') return json({ id: 'file-1' });
+      if (url.includes('alt=media')) {
+        reads += 1;
+        if (reads === 1) return json({ error: { message: 'notFound' } }, 404);
+        return json(snapshot);
+      }
+      if (new URL(url).searchParams.get('q')?.includes('in parents')) return json({ files: [] });
+      return json({ error: { message: 'unexpected' } }, 500);
+    });
+
+    await expect(saveCloudSnapshot('token-1', 'folder-1', null, snapshot)).resolves.toBeUndefined();
+    expect(reads).toBe(2);
+  });
+});
+
+describe('testDriveConnection', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fails at the permission step when Google did not grant a Drive file scope', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const steps = await testDriveConnection('token-1', ['https://www.googleapis.com/auth/userinfo.email']);
+
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ step: 'Permission', ok: false });
+    // No point calling Drive when the token cannot write.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('passes the permission step for a drive.file token', async () => {
+    vi.stubGlobal('fetch', async (url: string) => {
+      const query = new URL(url).searchParams.get('q') ?? '';
+      if (query.includes('mimeType')) return json({ files: [{ id: 'folder-1', name: 'Dayflow' }] });
+      if (query.includes('in parents')) return json({ files: [] });
+      return json({ files: [] });
+    });
+
+    const steps = await testDriveConnection('token-1', [
+      'https://www.googleapis.com/auth/drive.file',
+    ]);
+
+    expect(steps[0]).toMatchObject({ step: 'Permission', ok: true });
+    expect(steps.map((step) => step.step)).toEqual(['Permission', 'Dayflow folder', 'Backup file']);
+    expect(steps.find((step) => step.step === 'Backup file')?.message).toContain(
+      'does not exist yet'
+    );
   });
 });

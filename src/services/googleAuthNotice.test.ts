@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  APP_DATA_SCOPE,
   DRIVE_SCOPE,
   describeGoogleAuthFailure,
   getCachedAccessToken,
+  getCachedTokenScopes,
+  hasAppDataScope,
   readBootOAuthNotice,
   stashOAuthNotice,
 } from './googleAuthService';
@@ -78,6 +81,47 @@ describe('cached Drive token', () => {
       })
     );
     expect(getCachedAccessToken()).toBe('drive-token');
+  });
+
+  it('uses drive.file rather than the restricted full Drive scope', () => {
+    expect(DRIVE_SCOPE).toBe('https://www.googleapis.com/auth/drive.file');
+  });
+
+  it('keeps a token that already carries the full Drive scope', () => {
+    localStorage.setItem(
+      'daily_tasks_google_token_v1',
+      JSON.stringify({
+        accessToken: 'full-drive',
+        expiresAt: Date.now() + 60_000,
+        scopes: ['https://www.googleapis.com/auth/drive'],
+      })
+    );
+    expect(getCachedAccessToken()).toBe('full-drive');
+  });
+
+  it('reports the granted scopes for the sync engine', () => {
+    localStorage.setItem(
+      'daily_tasks_google_token_v1',
+      JSON.stringify({
+        accessToken: 'drive-token',
+        expiresAt: Date.now() + 60_000,
+        scopes: [DRIVE_SCOPE],
+      })
+    );
+    expect(getCachedTokenScopes()).toEqual([DRIVE_SCOPE]);
+  });
+});
+
+describe('hidden app-data access', () => {
+  it('is unavailable under drive.file, so the migration read is skipped', () => {
+    expect(hasAppDataScope([DRIVE_SCOPE])).toBe(false);
+    expect(hasAppDataScope([])).toBe(false);
+    expect(hasAppDataScope(undefined)).toBe(false);
+  });
+
+  it('is available with an app-data or full Drive token', () => {
+    expect(hasAppDataScope([APP_DATA_SCOPE])).toBe(true);
+    expect(hasAppDataScope(['https://www.googleapis.com/auth/drive'])).toBe(true);
   });
 });
 
