@@ -82,7 +82,7 @@ function mergeSettings(
   return remoteTime > localTime ? remote : local;
 }
 
-function mergeTombstones(
+export function mergeTombstones(
   local: Record<string, string>,
   remote: Record<string, string>
 ): Record<string, string> {

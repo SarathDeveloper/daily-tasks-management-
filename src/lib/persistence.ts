@@ -74,9 +74,9 @@ const GLOBAL_KEYS: StorageKeys = {
 };
 
 /**
- * Storage keys are namespaced per signed-in profile. The un-signed-in keys are
- * kept byte-for-byte identical to the pre-sync app so existing installs keep
- * their data after the update.
+ * The running app always uses the default keys (`userId` omitted). A user id
+ * still maps to the old per-profile keys so a one-time migration can read
+ * them. Those names stay byte-for-byte identical to the keys that profile wrote.
  */
 export function getStorageKeys(userId?: string | null): StorageKeys {
   if (!userId) return GLOBAL_KEYS;

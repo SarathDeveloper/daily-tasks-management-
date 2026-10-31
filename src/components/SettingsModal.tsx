@@ -1,9 +1,11 @@
 import React, { useRef, useState } from 'react';
-import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette, Clock, AlertTriangle, Music } from 'lucide-react';
+import { X, Bell, Volume2, Moon, Sun, Download, Upload, RotateCcw, ShieldCheck, Palette, Clock, AlertTriangle, Music, Lock, Folder } from 'lucide-react';
 import { NotificationSettings, SoundType } from '../types';
 import { audioService } from '../services/audioService';
 import { clearLocalMusicFile, previewLocalMusic, saveLocalMusicFile } from '../lib/localMusic';
+import { isAppLockEnabled, setAppLockEnabled } from '../lib/appLock';
 import { isNativeAndroid } from '../lib/platform';
+import { canUseAppLock, promptAppUnlock } from '../services/appLock';
 import { DayflowAlarm } from '../services/dayflowAlarm';
 import { CloudSyncSection } from './CloudSyncSection';
 import type { CloudSyncApi } from '../hooks/useCloudSync';
@@ -19,6 +21,12 @@ interface SettingsModalProps {
   onResetTasks: () => void;
   onExportData: () => void;
   onImportData: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  backupFolderSupported: boolean;
+  backupFolderName: string | null;
+  backupLastSavedAt: string | null;
+  backupFolderError: string;
+  onChooseBackupFolder: () => void;
+  onStopBackupFolder: () => void;
   cloudSync: CloudSyncApi;
   /** Android-only reminder capability snapshot. */
   nativeReminderState: ReminderReliabilityState | null;
@@ -37,6 +45,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onResetTasks,
   onExportData,
   onImportData,
+  backupFolderSupported,
+  backupFolderName,
+  backupLastSavedAt,
+  backupFolderError,
+  onChooseBackupFolder,
+  onStopBackupFolder,
   cloudSync,
   nativeReminderState,
   nextReminder,
@@ -44,6 +58,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const [songError, setSongError] = useState('');
+  const [appLockOn, setAppLockOn] = useState(() => isNativeAndroid() && isAppLockEnabled());
+  const [appLockError, setAppLockError] = useState('');
+  const [appLockBusy, setAppLockBusy] = useState(false);
 
   if (!isOpen) return null;
 
@@ -78,6 +95,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } catch (e) {
       const message = e instanceof Error ? e.message : '';
       setSongError(message === 'too-large' ? 'Choose a song under 15 MB.' : 'Could not use that song.');
+    }
+  };
+
+  const toggleAppLock = async () => {
+    if (appLockBusy) return;
+    setAppLockError('');
+    setAppLockBusy(true);
+    try {
+      const enabling = !appLockOn;
+      if (enabling) {
+        const check = await canUseAppLock();
+        if (!check.available) {
+          setAppLockError(check.message);
+          return;
+        }
+      }
+      const result = await promptAppUnlock();
+      if (!result.ok) {
+        if (!result.canceled) setAppLockError(result.message);
+        return;
+      }
+      setAppLockEnabled(enabling);
+      setAppLockOn(enabling);
+    } finally {
+      setAppLockBusy(false);
     }
   };
 
@@ -149,6 +191,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
           </div>
+
+          {isNativeAndroid() && (
+            <div className="space-y-2 bg-slate-50 dark:bg-slate-950/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-1.5">
+                  <Lock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>App lock</span>
+                </h3>
+                <input
+                  type="checkbox"
+                  checked={appLockOn}
+                  disabled={appLockBusy}
+                  onChange={() => void toggleAppLock()}
+                  aria-label="App lock"
+                  className="w-4 h-4 text-indigo-600 bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 rounded disabled:opacity-50"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                Ask for face unlock, fingerprint, or your PIN when Dayflow opens and each time you come back to it.
+              </p>
+              {appLockError && <p className="text-[11px] text-rose-600">{appLockError}</p>}
+            </div>
+          )}
+
           {/* Sound & Notifications */}
           <div className="space-y-3 bg-slate-50 dark:bg-slate-950/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
             <h3 className="font-bold text-slate-800 dark:text-slate-200 text-xs">Notification Sound Preferences</h3>
@@ -356,6 +422,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Backup & Data Controls */}
           <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
             <h3 className="font-bold text-slate-700 dark:text-slate-300 text-xs">Data Backup & Recovery</h3>
+            <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+              The file includes tasks, diary, habits, goals, money, and alarms. It does not include your custom alarm song.
+            </p>
+            {backupFolderSupported && (
+              <div className="space-y-2">
+                <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+                  Leaving the app replaces dayflow-backup.json in that folder.
+                </p>
+                {backupFolderName ? (
+                  <>
+                    <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                      <Folder className="w-3.5 h-3.5" />
+                      <span>{backupFolderName}</span>
+                    </p>
+                    {backupLastSavedAt && (
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Last saved {new Date(backupLastSavedAt).toLocaleString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
+                      </p>
+                    )}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={onChooseBackupFolder}
+                        className="py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 font-semibold transition-colors"
+                      >
+                        Change folder
+                      </button>
+                      <button
+                        onClick={onStopBackupFolder}
+                        className="py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 font-semibold transition-colors"
+                      >
+                        Stop automatic backup
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button
+                    onClick={onChooseBackupFolder}
+                    className="w-full py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <Folder className="w-3.5 h-3.5" />
+                    <span>Choose folder</span>
+                  </button>
+                )}
+                {backupFolderError && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-300">{backupFolderError}</p>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={onExportData}
@@ -370,7 +489,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>Import JSON</span>
                 <input
                   type="file"
-                  accept=".json"
+                  accept="application/json,.json,text/plain"
                   onChange={onImportData}
                   className="hidden"
                 />

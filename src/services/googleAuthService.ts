@@ -7,11 +7,13 @@
  * until it runs out, after which the user reconnects with one tap.
  */
 import { GoogleSignIn } from '@capawesome/capacitor-google-sign-in';
+import { hasOAuthRedirectResult, oauthHashError } from '../lib/oauthRedirect';
 import { isNative } from '../lib/platform';
 
 const DRIVE_APP_DATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const ACCOUNT_KEY = 'daily_tasks_google_account_v1';
 const TOKEN_KEY = 'daily_tasks_google_token_v1';
+const OAUTH_NOTICE_KEY = 'daily_tasks_google_oauth_notice_v1';
 /** Google access tokens live ~60 minutes; refresh a little earlier. */
 const TOKEN_LIFETIME_MS = 55 * 60 * 1000;
 
@@ -49,6 +51,61 @@ export function isGoogleSignInConfigured(): boolean {
 
 export function isNativePlatform(): boolean {
   return isNative();
+}
+
+/**
+ * A failed redirect is recorded before React mounts. The value is latched so
+ * Strict Mode's second initializer still sees it after sessionStorage is cleared.
+ */
+let latchedOAuthNotice: string | null | undefined;
+/** Set when a redirect saved an account. Survives a Strict Mode effect restart. */
+let pendingRedirectAccount = false;
+
+export function hasPendingRedirectAccount(): boolean {
+  return pendingRedirectAccount;
+}
+
+export function acknowledgeRedirectAccount(): void {
+  pendingRedirectAccount = false;
+}
+
+export function stashOAuthNotice(message: string | null): void {
+  latchedOAuthNotice = message;
+  try {
+    if (message) sessionStorage.setItem(OAUTH_NOTICE_KEY, message);
+    else sessionStorage.removeItem(OAUTH_NOTICE_KEY);
+  } catch {
+    // sessionStorage can be unavailable in a private webview
+  }
+}
+
+export function readBootOAuthNotice(): string | null {
+  if (latchedOAuthNotice === undefined) {
+    try {
+      latchedOAuthNotice = sessionStorage.getItem(OAUTH_NOTICE_KEY);
+    } catch {
+      latchedOAuthNotice = null;
+    }
+  }
+  try {
+    sessionStorage.removeItem(OAUTH_NOTICE_KEY);
+  } catch {
+    // sessionStorage can be unavailable in a private webview
+  }
+  return latchedOAuthNotice;
+}
+
+export function describeGoogleAuthFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('reauth') ||
+    lower.includes('unregistered_on_api_console') ||
+    lower.includes('developer_error')
+  ) {
+    return `${message} Add an Android OAuth client for package com.dayflow.dailytasks and this APK’s signing certificate.`;
+  }
+  return message;
 }
 
 export function getStoredAccount(): GoogleAccount | null {
@@ -145,16 +202,34 @@ export async function connectGoogleAccount(): Promise<GoogleAccount> {
   }
 }
 
+function clearOAuthCallbackFromUrl(): void {
+  const url = new URL(window.location.href);
+  if (!url.hash) return;
+  url.hash = '';
+  window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+}
+
 /** Completes the redirect-based flow on the web build. Safe to call on native. */
 export async function completeWebRedirectIfNeeded(): Promise<GoogleAccount | null> {
   if (isNativePlatform() || !isGoogleSignInConfigured()) return null;
-  const url = new URL(window.location.href);
-  const isRedirectBack = url.searchParams.has('code') || url.searchParams.has('state');
-  if (!isRedirectBack) return null;
+  if (typeof window === 'undefined' || !hasOAuthRedirectResult(window.location.href)) return null;
+
+  // The plugin throws `error_description` and drops the `error` code, so a
+  // cancel would otherwise show up as a sign-in failure.
+  if (oauthHashError(window.location.href) === 'access_denied') {
+    clearOAuthCallbackFromUrl();
+    throw new GoogleAuthError('CANCELED', 'Sign-in was cancelled.');
+  }
 
   await initialize();
   try {
     const result = await GoogleSignIn.handleRedirectCallback();
+    if (!result.accessToken) {
+      throw new GoogleAuthError(
+        'NO_ACCESS_TOKEN',
+        'Google did not return a Drive token. Check that the Drive API is enabled for this OAuth client.'
+      );
+    }
     const account: GoogleAccount = {
       userId: result.userId,
       email: result.email ?? '',
@@ -164,14 +239,22 @@ export async function completeWebRedirectIfNeeded(): Promise<GoogleAccount | nul
     };
     storeAccount(account);
     storeCachedToken(toCachedToken(result.accessToken));
-    // Strip the OAuth parameters so a reload does not replay the code.
-    url.search = '';
-    window.history.replaceState({}, '', url.toString());
+    pendingRedirectAccount = true;
     return account;
-  } catch (e) {
-    console.warn('Google redirect callback failed:', e);
-    return null;
+  } catch (error) {
+    clearOAuthCallbackFromUrl();
+    if (error instanceof GoogleAuthError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === 'access_denied' || message.toLowerCase().includes('cancel')) {
+      throw new GoogleAuthError('CANCELED', 'Sign-in was cancelled.');
+    }
+    throw new GoogleAuthError('SIGN_IN_FAILED', message);
   }
+}
+
+/** Drops a token Drive has rejected so the account is no longer treated as linked. */
+export function clearCachedAccessToken(): void {
+  storeCachedToken(null);
 }
 
 /** Returns a usable access token from the cache, or null when it has expired. */

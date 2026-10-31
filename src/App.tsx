@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, User, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -67,13 +67,12 @@ import { NotificationBanner } from './components/NotificationBanner';
 import { SettingsModal } from './components/SettingsModal';
 import { BottomNav } from './components/BottomNav';
 import { Sidebar } from './components/Sidebar';
-import { AuthModal } from './components/AuthModal';
 import { InstallPrompt } from './components/InstallPrompt';
+import { AppLockScreen } from './components/AppLockScreen';
 import { Dropdown } from './components/ui/Dropdown';
 import { Toast } from './components/ui/Toast';
 import { Card } from './components/ui/Card';
 import { Button } from './components/ui/Button';
-import { getCurrentUser } from './services/authService';
 import { NotificationService, calculateNextDueDate } from './services/notificationService';
 import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style as StatusBarStyle } from '@capacitor/status-bar';
@@ -88,6 +87,28 @@ import {
   type NotificationSetupResult,
 } from './services/nativeNotificationService';
 import { isNative, isNativeAndroid } from './lib/platform';
+import { isAppLockEnabled } from './lib/appLock';
+import { isUnlockPromptOpen, promptAppUnlock, shouldIgnoreAppPause, shouldIgnoreAppResume } from './services/appLock';
+import {
+  BackupError,
+  buildBackup,
+  backupFilename,
+  isShareCancel,
+  parseBackup,
+  recordIds,
+  saveBackupFile,
+  stampImportedBackup,
+  type BackupArrayKey,
+  type ParsedBackup,
+} from './lib/backup';
+import {
+  chooseBackupFolder,
+  clearBackupFolder,
+  isBackupCancel,
+  isChoosingBackupFolder,
+  readAutoBackupStatus,
+  writeAutomaticBackup,
+} from './lib/localBackupFolder';
 import {
   DEFAULT_SETTINGS,
   getStorageKeys,
@@ -117,12 +138,16 @@ import { ReminderReliabilityCard } from './components/ReminderReliabilityCard';
 
 const REMINDER_NOTICE_DISMISSED_KEY = 'daily_tasks_reminder_notice_dismissed_v1';
 
+/** Skip the write while a profile switch is still loading, so the previous profile is not saved under the new keys. */
+function usePersistJson(key: string, value: unknown, enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    localStorage.setItem(key, JSON.stringify(value));
+  }, [key, value, enabled]);
+}
+
 export default function App() {
   const todayStr = new Date().toISOString().split('T')[0];
-
-  // User Auth State
-  const [currentUser, setCurrentUser] = useState<User | null>(() => getCurrentUser());
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   // Theme State (Light / Dark Mode)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -161,8 +186,8 @@ export default function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Dynamic user-bound storage keys (single source of truth: lib/persistence)
-  const storageKeys = useMemo(() => getStorageKeys(currentUser?.id), [currentUser?.id]);
+  // One profile on this device. Desktop and phone meet in the same Drive file.
+  const storageKeys = getStorageKeys(null);
   const userTasksKey = storageKeys.tasks;
   const userCategoriesKey = storageKeys.categories;
   const userFinanceKey = storageKeys.transactions;
@@ -389,6 +414,9 @@ export default function App() {
     }
     return DEFAULT_SETTINGS;
   });
+  const [appLocked, setAppLocked] = useState(() => isNativeAndroid() && isAppLockEnabled());
+  const [lockError, setLockError] = useState('');
+  const [nativeBootReady, setNativeBootReady] = useState(() => !isNativeAndroid());
 
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [activeTab, setActiveTab] = useState<ActiveTab>('today');
@@ -443,21 +471,30 @@ export default function App() {
     txs: FinanceTransaction[];
   } | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [backupFolderSupported, setBackupFolderSupported] = useState(false);
+  const [backupFolderName, setBackupFolderName] = useState<string | null>(null);
+  const [backupLastSavedAt, setBackupLastSavedAt] = useState<string | null>(null);
+  const [backupFolderError, setBackupFolderError] = useState('');
   const [activeAlert, setActiveAlert] = useState<{ task: Task; triggeredAt: Date } | null>(null);
   const [focusTask, setFocusTask] = useState<Task | null>(null);
 
   // Undo toast for recently deleted tasks
   const [recentlyDeleted, setRecentlyDeleted] = useState<{ task: Task; index: number } | null>(null);
 
-  // Reload tasks, categories & finance whenever currentUser changes
+  // Saves wait until stored data is in state. Writing earlier, during a cloud
+  // reload, would persist the previous snapshot over the one just applied.
+  const hydrationToken = String(dataEpoch);
+  const [readyHydrationToken, setReadyHydrationToken] = useState(hydrationToken);
+  const canPersist = readyHydrationToken === hydrationToken;
+
+  // Reload after a cloud merge writes a new snapshot into localStorage.
   useEffect(() => {
     try {
       const savedTasks = localStorage.getItem(userTasksKey);
       if (savedTasks) {
         setTasks(JSON.parse(savedTasks));
       } else {
-        const init = getInitialTasks().map((t) => ({ ...t, userId: currentUser?.id }));
-        setTasks(init);
+        setTasks(getInitialTasks());
       }
 
       const savedCats = localStorage.getItem(userCategoriesKey);
@@ -473,11 +510,7 @@ export default function App() {
         : [];
       // Materialize recurring transactions up to today.
       const todayStrLoad = new Date().toISOString().split('T')[0];
-      const materialized = materializeRecurringTransactions(
-        loadedFinance,
-        todayStrLoad,
-        currentUser?.id
-      );
+      const materialized = materializeRecurringTransactions(loadedFinance, todayStrLoad);
       setTransactions(materialized);
 
       const savedAccounts = localStorage.getItem(userAccountsKey);
@@ -497,6 +530,9 @@ export default function App() {
 
       const savedSavings = localStorage.getItem(userSavingsKey);
       setSavingsGoals(savedSavings ? JSON.parse(savedSavings) : []);
+
+      const savedSavingsEntries = localStorage.getItem(userSavingsEntriesKey);
+      setSavingsEntries(savedSavingsEntries ? JSON.parse(savedSavingsEntries) : []);
 
       const savedAlertState = localStorage.getItem(userAlertStateKey);
       setBudgetAlertState(savedAlertState ? JSON.parse(savedAlertState) : {});
@@ -518,8 +554,7 @@ export default function App() {
       const { payments: materializedPayments } = materializeBillPayments(
         loadedBillTemplates,
         loadedBillPayments,
-        currentMonthLoad,
-        currentUser?.id
+        currentMonthLoad
       );
       setBillPayments(materializedPayments);
 
@@ -544,87 +579,34 @@ export default function App() {
       );
     } catch (e) {
       console.warn('Error loading user data:', e);
+    } finally {
+      setReadyHydrationToken(String(dataEpoch));
     }
-  }, [currentUser?.id, dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
+  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
-  useEffect(() => {
-    localStorage.setItem(userTasksKey, JSON.stringify(tasks));
-  }, [tasks, userTasksKey]);
+  usePersistJson(userTasksKey, tasks, canPersist);
+  usePersistJson(userCategoriesKey, categories, canPersist);
+  usePersistJson(userFinanceKey, transactions, canPersist);
+  usePersistJson(userAccountsKey, accounts, canPersist);
+  usePersistJson(userLedgerSettingsKey, ledgerSettings, canPersist);
+  usePersistJson(userBudgetsKey, budgets, canPersist);
+  usePersistJson(userCatBudgetsKey, categoryBudgets, canPersist);
+  usePersistJson(userDebtsKey, debts, canPersist);
+  usePersistJson(userSavingsKey, savingsGoals, canPersist);
+  usePersistJson(userAlertStateKey, budgetAlertState, canPersist);
+  usePersistJson(userBillTemplatesKey, billTemplates, canPersist);
+  usePersistJson(userBillPaymentsKey, billPayments, canPersist);
+  usePersistJson(userSavingsEntriesKey, savingsEntries, canPersist);
+  usePersistJson(userGoalsKey, goals, canPersist);
+  usePersistJson(userHabitsKey, habits, canPersist);
+  usePersistJson(userHabitCheckInsKey, habitCheckIns, canPersist);
+  usePersistJson(userAlarmsKey, alarms, canPersist);
+  usePersistJson(userDiaryKey, diaryEntries, canPersist);
+  usePersistJson(userSavingsStreakKey, savingsStreak, canPersist);
 
   useEffect(() => {
-    localStorage.setItem(userCategoriesKey, JSON.stringify(categories));
-  }, [categories, userCategoriesKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userFinanceKey, JSON.stringify(transactions));
-  }, [transactions, userFinanceKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userAccountsKey, JSON.stringify(accounts));
-  }, [accounts, userAccountsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userLedgerSettingsKey, JSON.stringify(ledgerSettings));
-  }, [ledgerSettings, userLedgerSettingsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userBudgetsKey, JSON.stringify(budgets));
-  }, [budgets, userBudgetsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userCatBudgetsKey, JSON.stringify(categoryBudgets));
-  }, [categoryBudgets, userCatBudgetsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userDebtsKey, JSON.stringify(debts));
-  }, [debts, userDebtsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userSavingsKey, JSON.stringify(savingsGoals));
-  }, [savingsGoals, userSavingsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userAlertStateKey, JSON.stringify(budgetAlertState));
-  }, [budgetAlertState, userAlertStateKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userBillTemplatesKey, JSON.stringify(billTemplates));
-  }, [billTemplates, userBillTemplatesKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userBillPaymentsKey, JSON.stringify(billPayments));
-  }, [billPayments, userBillPaymentsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userSavingsEntriesKey, JSON.stringify(savingsEntries));
-  }, [savingsEntries, userSavingsEntriesKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userGoalsKey, JSON.stringify(goals));
-  }, [goals, userGoalsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userHabitsKey, JSON.stringify(habits));
-  }, [habits, userHabitsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userHabitCheckInsKey, JSON.stringify(habitCheckIns));
-  }, [habitCheckIns, userHabitCheckInsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userAlarmsKey, JSON.stringify(alarms));
-  }, [alarms, userAlarmsKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userDiaryKey, JSON.stringify(diaryEntries));
-  }, [diaryEntries, userDiaryKey]);
-
-  useEffect(() => {
-    localStorage.setItem(userSavingsStreakKey, JSON.stringify(savingsStreak));
-  }, [savingsStreak, userSavingsStreakKey]);
-
-  useEffect(() => {
+    if (!canPersist) return;
     localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
     // Only stamp a settings edit when the serialized value actually changed
     // since the last stamp. This keeps a cloud-pulled value from being
@@ -637,7 +619,7 @@ export default function App() {
       settingsUpdatedAt: new Date().toISOString(),
       settingsSnapshot: serialized,
     });
-  }, [settings, STORAGE_KEY_SETTINGS, storageKeys]);
+  }, [settings, STORAGE_KEY_SETTINGS, storageKeys, canPersist]);
 
   // Single revision counter for every piece of user data -> drives cloud sync
   // debouncing without wiring a callback into a dozen save effects.
@@ -665,7 +647,6 @@ export default function App() {
 
   // Google Drive backup
   const cloudSync = useCloudSync({
-    profileId: currentUser?.id ?? null,
     revision: localRevision,
     onDataApplied: () => setDataEpoch((value) => value + 1),
   });
@@ -719,10 +700,32 @@ export default function App() {
   goalsRef.current = goals;
   const alarmsRef = useRef<Alarm[]>(alarms);
   alarmsRef.current = alarms;
+  const writeLeaveBackupRef = useRef<() => void>(() => {});
   const musicReadyRef = useRef(musicReady);
   musicReadyRef.current = musicReady;
   const ringingRef = useRef<RingSession | null>(ringing);
   ringingRef.current = ringing;
+  const nativeBootReadyRef = useRef(nativeBootReady);
+  nativeBootReadyRef.current = nativeBootReady;
+
+  const unlockApp = useCallback(async () => {
+    if (!isNativeAndroid() || isUnlockPromptOpen()) return;
+    if (!isAppLockEnabled()) {
+      setAppLocked(false);
+      setLockError('');
+      return;
+    }
+    const result = await promptAppUnlock();
+    if (result.ok) {
+      setAppLocked(false);
+      setLockError('');
+    } else {
+      setAppLocked(true);
+      setLockError(result.canceled ? '' : result.message);
+    }
+  }, []);
+  const unlockAppRef = useRef(unlockApp);
+  unlockAppRef.current = unlockApp;
 
   // ---------------------------------------------------------------------
   // Reminders
@@ -736,36 +739,42 @@ export default function App() {
     let cancelled = false;
 
     const boot = async () => {
-      // Hide the splash first: the notification permission dialog would
-      // otherwise appear on top of a blank splash screen with no context.
-      await SplashScreen.hide().catch(() => {});
+      try {
+        // Hide the splash first: the notification permission dialog would
+        // otherwise appear on top of a blank splash screen with no context.
+        await SplashScreen.hide().catch(() => {});
 
-      const result = await ensureNotificationSetup();
-      if (cancelled) return;
-      setNativeSetup(result);
-      setPermissionStatus(result.granted ? 'granted' : 'denied');
+        const result = await ensureNotificationSetup();
+        if (cancelled) return;
+        setNativeSetup(result);
+        setPermissionStatus(result.granted ? 'granted' : 'denied');
 
-      removeListeners = await registerReminderListeners({
-        onDue: (taskId) => {
-          if (taskId.startsWith('habit:')) {
-            setActiveTab('habits');
-            return;
-          }
-          const task = tasksRef.current.find((t) => t.id === taskId);
-          if (task) setActiveAlert({ task, triggeredAt: new Date() });
-        },
-        onOpened: (taskId) => {
-          if (taskId.startsWith('habit:')) {
-            setActiveTab('habits');
-            return;
-          }
-          const task = tasksRef.current.find((t) => t.id === taskId);
-          if (!task) return;
-          setSelectedDate(task.date);
-          setActiveTab('today');
-          setActiveAlert({ task, triggeredAt: new Date() });
-        },
-      });
+        removeListeners = await registerReminderListeners({
+          onDue: (taskId) => {
+            if (taskId.startsWith('habit:')) {
+              setActiveTab('habits');
+              return;
+            }
+            const task = tasksRef.current.find((t) => t.id === taskId);
+            if (task) setActiveAlert({ task, triggeredAt: new Date() });
+          },
+          onOpened: (taskId) => {
+            if (taskId.startsWith('habit:')) {
+              setActiveTab('habits');
+              return;
+            }
+            const task = tasksRef.current.find((t) => t.id === taskId);
+            if (!task) return;
+            setSelectedDate(task.date);
+            setActiveTab('today');
+            setActiveAlert({ task, triggeredAt: new Date() });
+          },
+        });
+      } catch (e) {
+        console.warn('Native reminder setup failed:', e);
+      } finally {
+        if (!cancelled) setNativeBootReady(true);
+      }
     };
 
     void boot();
@@ -777,6 +786,13 @@ export default function App() {
     // Boot once per app launch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const promptedAfterBoot = useRef(false);
+  useEffect(() => {
+    if (!nativeBootReady || promptedAfterBoot.current) return;
+    promptedAfterBoot.current = true;
+    if (isNativeAndroid() && isAppLockEnabled()) void unlockApp();
+  }, [nativeBootReady, unlockApp]);
 
   useEffect(() => {
     let cancelled = false;
@@ -825,6 +841,72 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [tasks, settings, habits, habitCheckIns, goals, alarms, musicReady, nativeSetup?.granted, pushNativeSchedule]);
 
+  writeLeaveBackupRef.current = () => {
+    const file = buildBackup({
+      tasks,
+      categories,
+      transactions,
+      accounts,
+      ledgerSettings,
+      budgets,
+      categoryBudgets,
+      debts,
+      savingsGoals,
+      savingsEntries,
+      goals,
+      habits,
+      habitCheckIns,
+      alarms,
+      diaryEntries,
+      billTemplates,
+      billPayments,
+      settings,
+      theme,
+      budgetAlertState,
+    });
+    void writeAutomaticBackup(file).then((result) => {
+      if (result === 'saved') {
+        setBackupLastSavedAt(new Date().toISOString());
+        return;
+      }
+      if (result === 'lost') {
+        setBackupFolderName(null);
+        setBackupLastSavedAt(null);
+        setBackupFolderError('Choose the folder again.');
+      }
+    });
+  };
+
+  useEffect(() => {
+    void readAutoBackupStatus().then((status) => {
+      setBackupFolderSupported(status.supported);
+      setBackupFolderName(status.name);
+      setBackupLastSavedAt(status.lastSavedAt);
+      if (status.lost) setBackupFolderError('Choose the folder again.');
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+    void readAutoBackupStatus().then((status) => {
+      setBackupFolderSupported(status.supported);
+      setBackupFolderName(status.name);
+      setBackupLastSavedAt(status.lastSavedAt);
+      if (status.lost) setBackupFolderError('Choose the folder again.');
+    });
+  }, [isSettingsOpen]);
+
+  useEffect(() => {
+    if (isNative()) return;
+    const onHide = () => {
+      if (document.visibilityState === 'hidden' && !isChoosingBackupFolder()) {
+        writeLeaveBackupRef.current();
+      }
+    };
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, []);
+
   // Coming back to the foreground: re-check permissions and reschedule, since
   // Android drops alarms scheduled while exact-alarm access was revoked.
   // Registered once; current settings are read through a ref.
@@ -832,7 +914,24 @@ export default function App() {
     if (!isNativeAndroid()) return;
     let remove: (() => void) | undefined;
     void CapApp.addListener('appStateChange', ({ isActive }) => {
-      if (!isActive) return;
+      if (!isActive) {
+        if (shouldIgnoreAppPause() || isChoosingBackupFolder()) return;
+        writeLeaveBackupRef.current();
+        if (isAppLockEnabled()) {
+          setAppLocked(true);
+          setLockError('');
+        }
+        return;
+      }
+      if (
+        !isChoosingBackupFolder() &&
+        !shouldIgnoreAppResume() &&
+        nativeBootReadyRef.current &&
+        isAppLockEnabled()
+      ) {
+        setAppLocked(true);
+        void unlockAppRef.current();
+      }
       void (async () => {
         const status = await getNativePermissionStatus();
         const granted = status === 'granted';
@@ -1110,7 +1209,6 @@ export default function App() {
     }
     const created: Alarm = {
       id: newLedgerId('alarm'),
-      userId: currentUser?.id,
       label: partial.label?.trim() || 'Alarm',
       time: partial.time || '07:00',
       enabled: partial.enabled ?? true,
@@ -1191,10 +1289,6 @@ export default function App() {
       setIsSettingsOpen(false);
       return;
     }
-    if (isAuthModalOpen) {
-      setIsAuthModalOpen(false);
-      return;
-    }
     if (activeAlert) {
       setActiveAlert(null);
       return;
@@ -1255,7 +1349,6 @@ export default function App() {
           const nextTask: Task = {
             ...target,
             id: `task-${Date.now()}`,
-            userId: currentUser?.id,
             completed: false,
             completedAt: undefined,
             date: nextDate,
@@ -1299,7 +1392,6 @@ export default function App() {
     } else {
       const newTask: Task = {
         id: `task-${Date.now()}`,
-        userId: currentUser?.id,
         title: partial.title || 'New Task',
         description: partial.description || '',
         completed: false,
@@ -1415,7 +1507,7 @@ export default function App() {
       ...diaryEntries.map((entry) => entry.id),
     ]);
     if (isNativeAndroid()) void cancelAllTaskReminders();
-    const freshTasks = getInitialTasks().map((t) => ({ ...t, userId: currentUser?.id }));
+    const freshTasks = getInitialTasks();
     setTasks(freshTasks);
     setCategories(INITIAL_CATEGORIES);
     // The sample data is (re)created here, so clear any tombstones it inherits.
@@ -1444,126 +1536,147 @@ export default function App() {
     setIsSettingsOpen(false);
   };
 
-  // Export Data
-  const handleExportData = () => {
-    const blob = new Blob(
-      [JSON.stringify({
-        tasks,
-        categories,
-        settings,
-        transactions,
-        accounts,
-        ledgerSettings,
-        budgets,
-        categoryBudgets,
-        debts,
-        savingsGoals,
-        billTemplates,
-        billPayments,
-        savingsEntries,
-        savingsStreak,
-        goals,
-        habits,
-        habitCheckIns,
-        alarms,
-        diaryEntries,
-        user: currentUser,
-      }, null, 2)],
-      { type: 'application/json' }
-    );
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `daily-tasks-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const applyImportedBackup = (parsed: ParsedBackup) => {
+    const stamped = stampImportedBackup(parsed);
+    const current: Record<BackupArrayKey, unknown> = {
+      tasks,
+      categories,
+      transactions,
+      accounts,
+      ledgerSettings,
+      budgets,
+      categoryBudgets,
+      debts,
+      savingsGoals,
+      savingsEntries,
+      goals,
+      habits,
+      habitCheckIns,
+      alarms,
+      diaryEntries,
+      billTemplates,
+      billPayments,
+    };
+
+    // Tombstone only records removed from collections this file actually replaces.
+    const removed: string[] = [];
+    const imported: string[] = [];
+    for (const key of stamped.present) {
+      if (key === 'settings') continue;
+      const nextIds = new Set(recordIds(stamped.data[key]));
+      for (const id of recordIds(current[key])) {
+        if (!nextIds.has(id)) removed.push(id);
+      }
+      for (const id of nextIds) imported.push(id);
+    }
+    markDeleted(storageKeys, removed);
+    unmarkDeleted(storageKeys, Array.from(new Set(imported)));
+
+    const { data, present } = stamped;
+    if (present.includes('tasks')) setTasks(data.tasks ?? []);
+    if (present.includes('categories')) setCategories(data.categories ?? []);
+    if (present.includes('transactions')) setTransactions(data.transactions ?? []);
+    if (present.includes('accounts')) setAccounts(data.accounts ?? []);
+    if (present.includes('ledgerSettings')) setLedgerSettings(data.ledgerSettings ?? []);
+    if (present.includes('budgets')) setBudgets(data.budgets ?? []);
+    if (present.includes('categoryBudgets')) setCategoryBudgets(data.categoryBudgets ?? []);
+    if (present.includes('debts')) setDebts(data.debts ?? []);
+    if (present.includes('savingsGoals')) setSavingsGoals(data.savingsGoals ?? []);
+    if (present.includes('savingsEntries')) setSavingsEntries(data.savingsEntries ?? []);
+    if (present.includes('goals')) setGoals(data.goals ?? []);
+    if (present.includes('habits')) setHabits(data.habits ?? []);
+    if (present.includes('habitCheckIns')) setHabitCheckIns(data.habitCheckIns ?? []);
+    if (present.includes('alarms')) setAlarms(data.alarms ?? []);
+    if (present.includes('diaryEntries')) {
+      setDiaryEntries(data.diaryEntries ?? []);
+      setRecentlyDeletedDiary(null);
+    }
+    if (present.includes('billTemplates')) setBillTemplates(data.billTemplates ?? []);
+    if (present.includes('billPayments')) setBillPayments(data.billPayments ?? []);
+    if (present.includes('settings') && data.settings) setSettings(data.settings);
+    if (stamped.theme) setTheme(stamped.theme);
+    if (stamped.budgetAlertState) setBudgetAlertState(stamped.budgetAlertState);
   };
 
-  // Import Data
+  const handleChooseBackupFolder = () => {
+    void chooseBackupFolder()
+      .then((folder) => {
+        setBackupFolderName(folder.name);
+        setBackupFolderSupported(true);
+        setBackupFolderError('');
+      })
+      .catch((error) => {
+        if (isBackupCancel(error)) return;
+        setBackupFolderError('Could not use that folder.');
+      });
+  };
+
+  const handleStopBackupFolder = () => {
+    void clearBackupFolder().then(() => {
+      setBackupFolderName(null);
+      setBackupLastSavedAt(null);
+      setBackupFolderError('');
+    });
+  };
+
+  const handleExportData = () => {
+    const backup = buildBackup({
+      tasks,
+      categories,
+      transactions,
+      accounts,
+      ledgerSettings,
+      budgets,
+      categoryBudgets,
+      debts,
+      savingsGoals,
+      savingsEntries,
+      goals,
+      habits,
+      habitCheckIns,
+      alarms,
+      diaryEntries,
+      billTemplates,
+      billPayments,
+      settings,
+      theme,
+      budgetAlertState,
+    });
+    const contents = JSON.stringify(backup, null, 2);
+    const filename = backupFilename();
+    const save = isNativeAndroid()
+      ? DayflowAlarm.shareBackup({ filename, contents })
+      : saveBackupFile(contents, filename);
+    void save.catch((err) => {
+      if (isShareCancel(err)) return;
+      console.warn('Backup export failed:', err);
+      alert('Could not save the backup.');
+    });
+  };
+
   const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
+    input.value = '';
     if (!file) return;
+
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = () => {
       try {
-        const parsed = JSON.parse(evt.target?.result as string);
-
-        // Keep cloud sync honest: records the import removes get a tombstone,
-        // and records it brings back lose theirs.
-        const idOf = (list: unknown): string[] =>
-          Array.isArray(list)
-            ? list
-                .map((item) => (item && typeof item === 'object' ? (item as { id?: string }).id : undefined))
-                .filter((id): id is string => typeof id === 'string')
-            : [];
-
-        const currentIds = [
-          ...idOf(tasks),
-          ...idOf(categories),
-          ...idOf(transactions),
-          ...idOf(accounts),
-          ...idOf(ledgerSettings),
-          ...idOf(budgets),
-          ...idOf(categoryBudgets),
-          ...idOf(debts),
-          ...idOf(savingsGoals),
-          ...idOf(savingsEntries),
-          ...idOf(billTemplates),
-          ...idOf(billPayments),
-          ...idOf(goals),
-          ...idOf(habits),
-          ...idOf(habitCheckIns),
-          ...idOf(alarms),
-          ...idOf(diaryEntries),
-        ];
-        const importedIds = [
-          ...idOf(parsed.tasks),
-          ...idOf(parsed.categories),
-          ...idOf(parsed.transactions),
-          ...idOf(parsed.accounts),
-          ...idOf(parsed.ledgerSettings),
-          ...idOf(parsed.budgets),
-          ...idOf(parsed.categoryBudgets),
-          ...idOf(parsed.debts),
-          ...idOf(parsed.savingsGoals),
-          ...idOf(parsed.savingsEntries),
-          ...idOf(parsed.billTemplates),
-          ...idOf(parsed.billPayments),
-          ...idOf(parsed.goals),
-          ...idOf(parsed.habits),
-          ...idOf(parsed.habitCheckIns),
-          ...idOf(parsed.alarms),
-          ...idOf(parsed.diaryEntries),
-        ];
-        const importedSet = new Set(importedIds);
-        markDeleted(
-          storageKeys,
-          currentIds.filter((id) => !importedSet.has(id))
+        const text = String(reader.result ?? '').replace(/^\uFEFF/, '');
+        const parsed = parseBackup(JSON.parse(text));
+        const confirmed = window.confirm(
+          'Replace the data on this device with this backup? Tasks, diary, habits, goals, money, and alarms in the file will overwrite what is on this device.'
         );
-        unmarkDeleted(storageKeys, Array.from(new Set(importedIds)));
-
-        if (parsed.tasks) setTasks(parsed.tasks);
-        if (parsed.categories) setCategories(parsed.categories);
-        if (parsed.settings) setSettings(parsed.settings);
-        if (parsed.transactions) setTransactions(parsed.transactions);
-        if (parsed.accounts) setAccounts(parsed.accounts);
-        if (parsed.ledgerSettings) setLedgerSettings(parsed.ledgerSettings);
-        if (parsed.budgets) setBudgets(parsed.budgets);
-        if (parsed.categoryBudgets) setCategoryBudgets(parsed.categoryBudgets);
-        if (parsed.debts) setDebts(parsed.debts);
-        if (parsed.savingsGoals) setSavingsGoals(parsed.savingsGoals);
-        if (parsed.billTemplates) setBillTemplates(parsed.billTemplates);
-        if (parsed.billPayments) setBillPayments(parsed.billPayments);
-        if (parsed.savingsEntries) setSavingsEntries(parsed.savingsEntries);
-        if (parsed.goals) setGoals(parsed.goals);
-        if (parsed.habits) setHabits(parsed.habits);
-        if (parsed.habitCheckIns) setHabitCheckIns(parsed.habitCheckIns);
-        if (parsed.alarms) setAlarms(parsed.alarms);
-        if (parsed.diaryEntries) setDiaryEntries(parsed.diaryEntries);
-        alert('Data successfully imported!');
+        if (!confirmed) return;
+        applyImportedBackup(parsed);
+        alert('Backup imported.');
       } catch (err) {
-        alert('Invalid JSON file format.');
+        alert(err instanceof BackupError ? err.message : 'This file is not a Dayflow backup.');
       }
+    };
+    reader.onerror = () => {
+      alert('Could not read that file.');
     };
     reader.readAsText(file);
   };
@@ -1592,7 +1705,6 @@ export default function App() {
 
     const created: Goal = {
       id: newLedgerId('goal'),
-      userId: currentUser?.id,
       title: partial.title?.trim() || 'New goal',
       note: partial.note?.trim() || undefined,
       startDate: partial.startDate || todayStr,
@@ -1659,7 +1771,6 @@ export default function App() {
 
     const created: Habit = {
       id: newLedgerId('habit'),
-      userId: currentUser?.id,
       title: partial.title?.trim() || 'New habit',
       goalId: partial.goalId || undefined,
       schedule: partial.schedule || { type: 'daily' },
@@ -1723,7 +1834,6 @@ export default function App() {
       : [
           {
             id: newLedgerId('diary'),
-            userId: currentUser?.id,
             date: draft.date,
             time: draft.time,
             mood: savedMood,
@@ -1790,7 +1900,7 @@ export default function App() {
       unmarkDeleted(storageKeys, [id]);
       const next: HabitCheckIn = {
         id,
-        userId: currentUser?.id ?? prior?.userId,
+        userId: prior?.userId,
         habitId,
         date,
         skipped: patch.skipped || undefined,
@@ -1866,7 +1976,7 @@ export default function App() {
       return false;
     }
 
-    const newTx = buildIncomeOrExpense(draft, { userId: currentUser?.id, now });
+    const newTx = buildIncomeOrExpense(draft, { now });
     setTransactions((prev) => [newTx, ...prev]);
     return true;
   };
@@ -1917,7 +2027,6 @@ export default function App() {
         ...prev,
         {
           id: `budget-${month}`,
-          userId: currentUser?.id,
           month,
           limit,
           updatedAt: now,
@@ -1939,7 +2048,6 @@ export default function App() {
         ...prev,
         {
           id: `cbudget-${month}-${category}`,
-          userId: currentUser?.id,
           month,
           category,
           limit,
@@ -1985,7 +2093,7 @@ export default function App() {
       window.alert(validation.message);
       return;
     }
-    const tx = buildIncomeOrExpense(draft, { userId: currentUser?.id });
+    const tx = buildIncomeOrExpense(draft);
     setTransactions((prev) => [tx, ...prev]);
   };
 
@@ -2041,7 +2149,6 @@ export default function App() {
 
     const newAccount: Account = {
       id: newLedgerId('acct'),
-      userId: currentUser?.id,
       name,
       type: partial.type || 'savings',
       bankName: partial.bankName,
@@ -2072,7 +2179,7 @@ export default function App() {
       return false;
     }
 
-    const transfer = buildTransfer(draft, { userId: currentUser?.id });
+    const transfer = buildTransfer(draft);
     const original = draft.id ? transactions.find((t) => t.id === draft.id) : undefined;
     if (original) {
       transfer.createdAt = original.createdAt;
@@ -2084,7 +2191,6 @@ export default function App() {
     if (!original && draft.atmFee && draft.atmFee > 0) {
       records.push(
         buildAtmFee(transfer, draft.atmFee, {
-          userId: currentUser?.id,
           category: 'Bills & Utilities',
           paymentMethod: 'cash',
         })
@@ -2115,7 +2221,6 @@ export default function App() {
           return [
             {
               id: 'ledger',
-              userId: currentUser?.id,
               allowNegativeBalance: false,
               defaultSavingsAccountId: destination.id,
               updatedAt: stamp,
@@ -2139,7 +2244,6 @@ export default function App() {
         return [
           {
             id: 'ledger',
-            userId: currentUser?.id,
             allowNegativeBalance: false,
             ...partial,
             updatedAt: now,
@@ -2191,7 +2295,6 @@ export default function App() {
     } else {
       const newDebt: Debt = {
         id: `debt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        userId: currentUser?.id,
         direction: partial.direction || 'lent',
         personName: partial.personName || 'Unknown',
         amount: partial.amount || 0,
@@ -2246,7 +2349,6 @@ export default function App() {
         ...prev,
         {
           id: `goal-${month}`,
-          userId: currentUser?.id,
           month,
           target,
           updatedAt: now,
@@ -2285,7 +2387,6 @@ export default function App() {
     } else {
       const newTemplate: BillTemplate = {
         id: `bill-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        userId: currentUser?.id,
         name: partial.name || 'Untitled Bill',
         amount: partial.amount || 0,
         category: partial.category || 'Other',
@@ -2350,7 +2451,7 @@ export default function App() {
       }
 
       const now = new Date().toISOString();
-      const newTx = buildIncomeOrExpense(draft, { userId: currentUser?.id });
+      const newTx = buildIncomeOrExpense(draft);
       setTransactions((prev) => [newTx, ...prev]);
       setBillPayments((prev) =>
         prev.map((p) =>
@@ -2460,7 +2561,6 @@ export default function App() {
     } else {
       const newEntry: SavingsEntry = {
         id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        userId: currentUser?.id,
         date: partial.date || new Date().toISOString().split('T')[0],
         amount: partial.amount || 0,
         note: partial.note,
@@ -2544,12 +2644,7 @@ export default function App() {
     if (billTemplates.length === 0) return;
     const currentMonth = new Date().toISOString().slice(0, 7);
     setBillPayments((prev) => {
-      const { payments } = materializeBillPayments(
-        billTemplates,
-        prev,
-        currentMonth,
-        currentUser?.id
-      );
+      const { payments } = materializeBillPayments(billTemplates, prev, currentMonth);
       // Avoid causing an unnecessary state update if nothing changed.
       if (payments.length === prev.length) return prev;
       return payments;
@@ -2607,19 +2702,20 @@ export default function App() {
     categoryFilter !== 'all' || priorityFilter !== 'all' || tagFilter !== 'all' || statusFilter !== 'all' || searchQuery !== '';
 
   return (
-    <div className={`min-h-dvh font-sans selection:bg-indigo-500 selection:text-white pb-[calc(6rem+env(safe-area-inset-bottom,0px))] lg:pb-8 lg:pl-64 transition-colors duration-200 ${
+    <>
+    <div
+      inert={appLocked}
+      className={`min-h-dvh font-sans selection:bg-indigo-500 selection:text-white pb-[calc(6rem+env(safe-area-inset-bottom,0px))] lg:pb-8 lg:pl-64 transition-colors duration-200 ${
       theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-stone-50 text-slate-900'
     }`}>
       {/* App Header */}
       <Header
         notificationSettings={settings}
         permissionStatus={permissionStatus}
-        currentUser={currentUser}
         theme={theme}
         onToggleTheme={handleToggleTheme}
         onRequestPermission={handleRequestPermission}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenAuth={() => setIsAuthModalOpen(true)}
       />
 
       <InstallPrompt />
@@ -3107,7 +3203,6 @@ export default function App() {
         onChangeTab={setActiveTab}
         onOpenQuickAdd={handleQuickAdd}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenProfile={() => setIsAuthModalOpen(true)}
       />
 
       <DiaryEntryModal
@@ -3249,6 +3344,12 @@ export default function App() {
         onResetTasks={handleResetTasks}
         onExportData={handleExportData}
         onImportData={handleImportData}
+        backupFolderSupported={backupFolderSupported}
+        backupFolderName={backupFolderName}
+        backupLastSavedAt={backupLastSavedAt}
+        backupFolderError={backupFolderError}
+        onChooseBackupFolder={handleChooseBackupFolder}
+        onStopBackupFolder={handleStopBackupFolder}
         cloudSync={cloudSync}
         nativeReminderState={
           isNativeAndroid() && nativeSetup
@@ -3257,14 +3358,6 @@ export default function App() {
         }
         nextReminder={isNativeAndroid() ? describeNextReminder(tasks, settings, habits, habitCheckIns, goals) : null}
         onRequestExactAlarm={handleOpenExactAlarmSettings}
-      />
-
-      {/* Auth Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        currentUser={currentUser}
-        onUserChanged={(user) => setCurrentUser(user)}
       />
 
       {recentlyDeletedDiary && (
@@ -3296,5 +3389,7 @@ export default function App() {
         />
       )}
     </div>
+    {appLocked && <AppLockScreen theme={theme} error={lockError} onUnlock={() => void unlockApp()} />}
+    </>
   );
 }

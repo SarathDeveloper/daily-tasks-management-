@@ -12,6 +12,9 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const SYNC_FILE_BASE = 'daily-tasks-sync';
 
+/** The only snapshot both this phone and the desktop site read and write. */
+export const SYNC_FILE_NAME = `${SYNC_FILE_BASE}.json`;
+
 export class DriveAuthError extends Error {
   constructor(message = 'Google Drive access expired.') {
     super(message);
@@ -36,11 +39,16 @@ export interface DriveFileRef {
 }
 
 /**
- * One Drive file per local profile so two people using the same Google account
- * on one device never overwrite each other.
+ * Desktop and phone share this one file. A signed-in local profile used to
+ * get its own name; that id is ignored so both devices meet here.
  */
-export function syncFileNameFor(profileId: string | null): string {
-  return profileId ? `${SYNC_FILE_BASE}-${profileId}.json` : `${SYNC_FILE_BASE}.json`;
+export function syncFileNameFor(_profileId?: string | null): string {
+  return SYNC_FILE_NAME;
+}
+
+/** Name of the per-profile file written before the single-profile switch. */
+export function legacySyncFileName(profileId: string): string {
+  return `${SYNC_FILE_BASE}-${profileId}.json`;
 }
 
 async function driveFetch(

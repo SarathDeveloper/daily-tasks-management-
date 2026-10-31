@@ -30,6 +30,12 @@ interface DayflowAlarmPlugin {
   stopPreview(): Promise<void>;
   sync(options: { plans: NativeRingPlan[] }): Promise<void>;
   consumeEvents(): Promise<{ events: AlarmEvent[] }>;
+  /** Open the Android share sheet for a JSON backup. The file stays in app cache. */
+  shareBackup(options: { filename: string; contents: string }): Promise<void>;
+  pickBackupFolder(): Promise<{ name: string }>;
+  getBackupFolder(): Promise<{ has: boolean; lost: boolean; name: string }>;
+  clearBackupFolder(): Promise<void>;
+  writeBackupFile(options: { contents: string }): Promise<void>;
   addListener(
     eventName: 'alarmEvent',
     listenerFunc: (event: AlarmEvent) => void

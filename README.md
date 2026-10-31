@@ -50,7 +50,7 @@ All data lives in `localStorage`; there is no backend. Cloud backup is optional 
 - Light / dark theme
 - Browser notifications with quiet hours
 - Sound effects and speech options
-- Local sign-in with per-user storage keys (data is scoped to the signed-in user)
+- One device profile for tasks, money, and diary. Optional Google Drive merge keeps the desktop site and the phone on the same file
 - Undo toast for deletes, JSON export / import, reset to sample data
 
 **Android app**
@@ -81,7 +81,7 @@ Install dependencies:
 npm install
 ```
 
-Start the dev server (runs on http://localhost:3001):
+Start the dev server (runs on http://localhost:3000):
 
 ```bash
 npm run dev
@@ -113,12 +113,10 @@ APK needs no IDE.
 One-time prerequisites on this machine:
 
 - Node 22+
-- A JDK 21 (Capacitor's notification plugin compiles with Java 21). It is
-  installed at `C:\Users\KSAN\.jdks\temurin-21.0.12.1+1` and pinned in
-  `android/gradle.properties` via `org.gradle.java.home`. Change that line if
-  your JDK lives somewhere else.
-- The Android SDK (already at `C:\Users\KSAN\AppData\Local\Android\Sdk`), wired
-  through `android/local.properties` (git-ignored).
+- A JDK 21 (Capacitor's notification plugin compiles with Java 21). The path is
+  pinned in `android/gradle.properties` via `org.gradle.java.home`. Change that
+  line if your JDK lives somewhere else.
+- The Android SDK, wired through `android/local.properties` (git-ignored).
 
 Build and install:
 
@@ -171,7 +169,7 @@ Everything else works without environment variables. To enable cloud backup:
 3. Create an OAuth client of type **Web application**; copy the client id into
    `.env`.
 4. Create an OAuth client of type **Android** with package
-   `com.ksan.dailytasks` and the keystore SHA-1 above.
+   `com.dayflow.dailytasks` and the keystore SHA-1 above.
 5. Rebuild. The only scope requested is
    `https://www.googleapis.com/auth/drive.appdata` (non-sensitive: access to a
    hidden per-app folder only).
@@ -201,15 +199,13 @@ src/
     BillTemplateModal.tsx  # Add / edit bill template
     FinanceAlertBanner.tsx # Budget threshold alerts
     NotificationBanner.tsx # Reminder alerts
-    AuthModal.tsx          # Local sign-in / sign-up
     SettingsModal.tsx      # Notification, reminder and cloud settings
     CloudSyncSection.tsx   # Google Drive connect / sync / restore UI
     ReminderReliabilityCard.tsx # Android permission + exact-alarm nudge
     ui/                    # Button, Card, Dropdown, Toast primitives
   hooks/
-    useCloudSync.ts        # Auth state, auto sync triggers, merge/restore
+    useCloudSync.ts        # Google auth state, auto sync triggers, merge/restore
   services/
-    authService.ts         # Local user registration and login
     notificationService.ts # Browser/PWA notifications (web fallback)
     nativeNotificationService.ts # Android alarms, channels, tap listeners
     googleAuthService.ts   # Google sign-in + token cache
@@ -236,10 +232,10 @@ scripts/
 
 ## Data and Privacy
 
-- All data is stored in `localStorage` under per-user keys (e.g. `daily_tasks_user_<id>`, `daily_finance_transactions_<id>`).
-- Sign-in is local only; passwords are hashed before storage. This is not a secure auth solution — do not treat it as one.
+- All data is stored in `localStorage` on this device, under one set of keys. There is no local account.
+- Desktop and phone stay in sync by connecting the same Google account. Both write `daily-tasks-sync.json` in Drive's hidden `appDataFolder`. Connect and Sync now merge; Restore replaces this device and drops edits that were never uploaded.
 - Clearing app/browser storage erases all tasks and finance data. Use Export JSON or Google Drive backup to keep a copy.
-- Google Drive backup is optional and off until you connect. It writes one JSON file to Drive's hidden `appDataFolder`; the app cannot see any other file in your Drive.
+- Google Drive backup is optional and off until you connect. The app cannot see any other file in your Drive.
 - The Drive access token is cached on the device with a 55-minute expiry so sync keeps working across launches without prompting. Disconnecting clears it. Sync is last-write-wins per record, with deletes tracked for 90 days.
 
 ## License

@@ -12,7 +12,6 @@ import {
   Settings,
   Target,
   TrendingUp,
-  UserRound,
   Wallet,
   Zap,
 } from 'lucide-react';
@@ -23,7 +22,6 @@ interface BottomNavProps {
   onChangeTab: (tab: ActiveTab) => void;
   onOpenQuickAdd: () => void;
   onOpenSettings: () => void;
-  onOpenProfile: () => void;
 }
 
 export const BottomNav: React.FC<BottomNavProps> = ({
@@ -31,7 +29,6 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   onChangeTab,
   onOpenQuickAdd,
   onOpenSettings,
-  onOpenProfile,
 }) => {
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const tabs = [
@@ -165,17 +162,6 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               >
                 <Settings className="h-5 w-5 shrink-0" />
                 <span>Settings</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMoreOpen(false);
-                  onOpenProfile();
-                }}
-                className="col-span-2 flex min-h-12 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-slate-600 dark:text-slate-300 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <UserRound className="h-5 w-5 shrink-0" />
-                <span>Profile</span>
               </button>
             </div>
           </div>

@@ -1,4 +1,4 @@
-package com.ksan.dailytasks;
+package com.dayflow.dailytasks;
 
 import android.app.Activity;
 import android.content.Intent;

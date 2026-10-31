@@ -29,10 +29,11 @@ function formatRelative(iso: string | null): string {
 
 export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
   const { status, account, lastSyncedAt, error, configured } = sync;
-  const isBusy = status === 'syncing';
+  const isBusy = status === 'syncing' || status === 'connecting';
 
   const statusLine = (() => {
     if (!configured) return 'Not configured for this build.';
+    if (status === 'connecting') return 'Connecting to Google…';
     if (status === 'syncing') return 'Syncing with Google Drive…';
     if (status === 'needs-auth') return 'Session expired. Reconnect to resume backup.';
     if (status === 'error') return error ?? 'Last sync failed.';
@@ -51,7 +52,7 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
           )}
           <span>Cloud Backup (Google Drive)</span>
         </h3>
-        {account && (
+        {account && status !== 'connecting' && (
           <span
             className={cn(
               'text-[10px] font-bold px-2 py-0.5 rounded-full border',
@@ -74,7 +75,7 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
         </div>
       )}
 
-      {error && status === 'error' && (
+      {error && status !== 'error' && status !== 'connecting' && status !== 'syncing' && (
         <p className="text-[11px] text-rose-600 dark:text-rose-400 break-words">{error}</p>
       )}
 
@@ -87,14 +88,20 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
 
       {configured && (
         <div className="flex flex-wrap gap-2 pt-1">
-          {!account || status === 'needs-auth' ? (
+          {!account || status === 'needs-auth' || status === 'connecting' ? (
             <Button size="sm" variant="primary" onClick={() => void sync.connect()} disabled={isBusy}>
               {isBusy ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Cloud className="w-3.5 h-3.5" />
               )}
-              <span>{status === 'needs-auth' ? 'Reconnect' : 'Connect Google Drive'}</span>
+              <span>
+                {status === 'connecting'
+                  ? 'Connecting…'
+                  : status === 'needs-auth'
+                    ? 'Reconnect'
+                    : 'Connect Google Drive'}
+              </span>
             </Button>
           ) : (
             <>

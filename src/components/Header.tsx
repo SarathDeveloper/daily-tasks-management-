@@ -1,28 +1,24 @@
 import React from 'react';
-import { Bell, BellOff, Volume2, Settings, ShieldAlert, User as UserIcon, LogIn, Sun, Moon } from 'lucide-react';
-import { NotificationSettings, User } from '../types';
+import { Bell, BellOff, Volume2, Settings, ShieldAlert, Sun, Moon } from 'lucide-react';
+import { NotificationSettings } from '../types';
 import { audioService } from '../services/audioService';
 
 interface HeaderProps {
   notificationSettings: NotificationSettings;
   permissionStatus: NotificationPermission | 'unsupported';
-  currentUser: User | null;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onRequestPermission: () => void;
   onOpenSettings: () => void;
-  onOpenAuth: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   notificationSettings,
   permissionStatus,
-  currentUser,
   theme,
   onToggleTheme,
   onRequestPermission,
   onOpenSettings,
-  onOpenAuth,
 }) => {
   const todayFormatted = new Date().toLocaleDateString('en-US', {
     weekday: 'short',
@@ -94,35 +90,6 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline">Dark</span>
             </button>
           </div>
-
-          {/* User Account / Auth Button */}
-          <button
-            onClick={onOpenAuth}
-            className={`min-h-[36px] sm:min-h-[40px] px-2.5 sm:px-3 rounded-xl border font-bold text-xs flex items-center justify-center gap-1.5 transition-colors ${
-              currentUser
-                ? 'bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border-slate-300 dark:border-slate-700'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-500 shadow-sm'
-            }`}
-            title={currentUser ? `Logged in as ${currentUser.name}` : 'Sign In / Sign Up'}
-          >
-            {currentUser ? (
-              <>
-                <div
-                  className={`w-5 h-5 rounded-full ${
-                    currentUser.avatarColor || 'bg-indigo-600'
-                  } text-white font-extrabold text-[10px] flex items-center justify-center`}
-                >
-                  {currentUser.name.charAt(0).toUpperCase()}
-                </div>
-                <span className="hidden sm:inline max-w-[100px] truncate">{currentUser.name.split(' ')[0]}</span>
-              </>
-            ) : (
-              <>
-                <LogIn className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">Sign In</span>
-              </>
-            )}
-          </button>
 
           {/* Sound Test Button -- hidden on mobile to save space */}
           <button

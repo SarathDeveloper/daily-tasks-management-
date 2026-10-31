@@ -1,4 +1,4 @@
-package com.ksan.dailytasks;
+package com.dayflow.dailytasks;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -15,9 +15,9 @@ import android.os.PowerManager;
 import androidx.core.app.NotificationCompat;
 
 public class DayflowRingService extends Service {
-    static final String ACTION_START = "com.ksan.dailytasks.RING";
-    static final String ACTION_DISMISS = "com.ksan.dailytasks.DISMISS";
-    static final String ACTION_SNOOZE = "com.ksan.dailytasks.SNOOZE";
+    static final String ACTION_START = "com.dayflow.dailytasks.RING";
+    static final String ACTION_DISMISS = "com.dayflow.dailytasks.DISMISS";
+    static final String ACTION_SNOOZE = "com.dayflow.dailytasks.SNOOZE";
     private static final String CHANNEL_ID = "dayflow_ring";
     private static final int NOTICE_ID = 42;
 
