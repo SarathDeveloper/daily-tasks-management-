@@ -35,7 +35,9 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
     if (!configured) return 'Not configured for this build.';
     if (status === 'connecting') return 'Connecting to Google…';
     if (status === 'syncing') return 'Syncing with Google Drive…';
-    if (status === 'needs-auth') return 'Session expired. Reconnect to resume backup.';
+    if (status === 'needs-auth') {
+      return error ?? 'Reconnect and allow Google Drive access so backups can upload and download.';
+    }
     if (status === 'error') return error ?? 'Last sync failed.';
     if (!account) return 'Data stays on this device until you connect.';
     return formatRelative(lastSyncedAt);
@@ -75,7 +77,7 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
         </div>
       )}
 
-      {error && status !== 'error' && status !== 'connecting' && status !== 'syncing' && (
+      {error && status !== 'error' && status !== 'needs-auth' && status !== 'connecting' && status !== 'syncing' && (
         <p className="text-[11px] text-rose-600 dark:text-rose-400 break-words">{error}</p>
       )}
 
@@ -145,10 +147,11 @@ export const CloudSyncSection: React.FC<CloudSyncSectionProps> = ({ sync }) => {
         </div>
       )}
 
-      {account && (
+      {configured && (
         <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
-          Backups go to a hidden folder only this app can open. Disconnecting leaves your data on this
-          device.
+          Backups are the file Dayflow / daily-tasks-sync.json in your Google Drive. Sync now uploads
+          this device and downloads newer changes from that file.
+          {account ? ' Disconnecting leaves your data on this device.' : ''}
         </p>
       )}
     </div>

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Wallet,
   Plus,
@@ -27,6 +27,7 @@ import {
   BillTemplate,
   BudgetAlert,
   CategoryBudget,
+  FinanceCategory,
   Debt,
   FinanceTransaction,
   MonthlyBudget,
@@ -39,9 +40,12 @@ import {
   ALL_PAYMENT_METHODS,
   EXPENSE_CATEGORIES,
   QUICK_ADD_AMOUNTS,
-  QUICK_ADD_FALLBACK_CATEGORIES,
   accountTypeMeta,
+  financeCategoryNames,
+  isCustomFinanceCategory,
+  quickAddCategoryNames,
 } from '../data/financeCategories';
+import { CategorySelect } from './ui/CategorySelect';
 import { recentExpenseCategories } from '../lib/financeRecurrence';
 import { formatPaise } from '../lib/money';
 import { computeAccountBalances, todayString } from '../lib/ledger';
@@ -63,12 +67,16 @@ import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Dropdown } from './ui/Dropdown';
 import { FinanceAlertBanner } from './FinanceAlertBanner';
+import { BankSmsInbox } from './BankSmsInbox';
 import { LedgerView, type LedgerViewProps } from './ledger/LedgerView';
 
 interface FinanceViewProps {
   transactions: FinanceTransaction[];
   budgets: MonthlyBudget[];
   categoryBudgets: CategoryBudget[];
+  financeCategories: FinanceCategory[];
+  onAddFinanceCategory: (kind: 'income' | 'expense', name: string) => string | null;
+  onDeleteFinanceCategory: (kind: 'income' | 'expense', name: string) => void;
   debts: Debt[];
   savingsGoals: SavingsGoal[];
   billTemplates: BillTemplate[];
@@ -102,6 +110,8 @@ interface FinanceViewProps {
   onDeleteSavings: (id: string) => void;
   onQuickAddSavings: (amount: number) => void;
   onDismissAlert: (key: string) => void;
+  /** Saves a confirmed bank SMS as a normal ledger entry. False keeps it pending. */
+  onConfirmBankSms: (partial: Partial<FinanceTransaction>) => boolean;
 }
 
 type FinanceMode = 'ledger' | 'daily' | 'weekly' | 'monthly' | 'bills' | 'debts' | 'savings';
@@ -148,6 +158,9 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   transactions,
   budgets,
   categoryBudgets,
+  financeCategories,
+  onAddFinanceCategory,
+  onDeleteFinanceCategory,
   debts,
   savingsGoals,
   billTemplates,
@@ -181,6 +194,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   onDeleteSavings,
   onQuickAddSavings,
   onDismissAlert,
+  onConfirmBankSms,
 }) => {
   const [mode, setMode] = useState<FinanceMode>('ledger');
   const [selectedMonth, setSelectedMonth] = useState(() => toMonthKey(selectedDate));
@@ -265,16 +279,36 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
     [categoryBudgets, selectedMonth]
   );
 
-  const recentCats = useMemo(() => {
-    const recents = recentExpenseCategories(transactions, 5);
-    if (recents.length >= 3) return recents.slice(0, 5);
-    const merged = Array.from(
-      new Set([...recents, ...QUICK_ADD_FALLBACK_CATEGORIES])
-    ) as string[];
-    return merged
-      .filter((c) => (EXPENSE_CATEGORIES as readonly string[]).includes(c))
-      .slice(0, 5);
-  }, [transactions]);
+  const recentCats = useMemo(
+    () => quickAddCategoryNames(recentExpenseCategories(transactions, 5), financeCategories),
+    [transactions, financeCategories]
+  );
+
+  const filterCategoryNames = useMemo(() => {
+    const kind = typeFilter === 'all' ? 'all' : typeFilter;
+    const used = transactions
+      .filter((tx) => typeFilter === 'all' || tx.type === typeFilter)
+      .map((tx) => tx.category);
+    return financeCategoryNames(kind, financeCategories, used);
+  }, [typeFilter, transactions, financeCategories]);
+
+  useEffect(() => {
+    if (categoryFilter === 'all') return;
+    const stillThere = filterCategoryNames.some(
+      (name) => name.toLowerCase() === categoryFilter.toLowerCase()
+    );
+    if (!stillThere) setCategoryFilter('all');
+  }, [categoryFilter, filterCategoryNames]);
+
+  const expenseCategoryNames = useMemo(
+    () => financeCategoryNames('expense', financeCategories),
+    [financeCategories]
+  );
+
+  useEffect(() => {
+    if (expenseCategoryNames.some((name) => name.toLowerCase() === catBudgetCategory.toLowerCase())) return;
+    setCatBudgetCategory('Other');
+  }, [expenseCategoryNames, catBudgetCategory]);
 
   const applyFilters = (list: FinanceTransaction[]) =>
     list.filter((t) => {
@@ -488,6 +522,13 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
         </Button>
       </div>
 
+      <BankSmsInbox
+        accounts={ledger.accounts}
+        transactions={transactions}
+        financeCategories={financeCategories}
+        onConfirm={onConfirmBankSms}
+      />
+
       {/* Alert banner */}
       {financeAlerts.length > 0 && (
         <FinanceAlertBanner alerts={financeAlerts} onDismiss={onDismissAlert} />
@@ -654,7 +695,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               title="Filter by Category"
               options={[
                 { value: 'all', label: 'All Categories' },
-                ...EXPENSE_CATEGORIES.map((c) => ({ value: c, label: c })),
+                ...filterCategoryNames.map((c) => ({ value: c, label: c })),
               ]}
             />
             <Dropdown
@@ -1302,15 +1343,18 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
             {addingCatBudget && (
               <div className="space-y-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                 <div className="grid grid-cols-2 gap-2">
-                  <select
+                  <CategorySelect
                     value={catBudgetCategory}
-                    onChange={(e) => setCatBudgetCategory(e.target.value)}
-                    className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    {EXPENSE_CATEGORIES.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
+                    options={expenseCategoryNames}
+                    onChange={setCatBudgetCategory}
+                    onAdd={(name) => onAddFinanceCategory('expense', name)}
+                    canDelete={isCustomFinanceCategory(catBudgetCategory, 'expense', financeCategories)}
+                    onDelete={() => {
+                      onDeleteFinanceCategory('expense', catBudgetCategory);
+                      setCatBudgetCategory('Other');
+                    }}
+                    className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-bold">₹</span>
                     <input

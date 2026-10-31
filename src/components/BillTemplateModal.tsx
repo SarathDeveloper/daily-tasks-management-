@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { X, Receipt } from 'lucide-react';
-import { Account, BillTemplate, PaymentMethod } from '../types';
+import { Account, BillTemplate, FinanceCategory, PaymentMethod } from '../types';
 import {
   EXPENSE_CATEGORIES,
   PAYMENT_METHODS,
   DEFAULT_PAYMENT_METHOD,
   accountTypeMeta,
+  financeCategoryNames,
+  isCustomFinanceCategory,
 } from '../data/financeCategories';
 import { Button } from './ui/Button';
+import { CategorySelect } from './ui/CategorySelect';
 import { accountLabel } from '../lib/ledger';
 
 interface BillTemplateModalProps {
@@ -16,6 +19,9 @@ interface BillTemplateModalProps {
   onSave: (template: Partial<BillTemplate>) => void;
   initialTemplate?: BillTemplate | null;
   accounts: Account[];
+  financeCategories: FinanceCategory[];
+  onAddFinanceCategory: (kind: 'income' | 'expense', name: string) => string | null;
+  onDeleteFinanceCategory: (kind: 'income' | 'expense', name: string) => void;
 }
 
 export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
@@ -24,6 +30,9 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
   onSave,
   initialTemplate,
   accounts,
+  financeCategories,
+  onAddFinanceCategory,
+  onDeleteFinanceCategory,
 }) => {
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
@@ -58,6 +67,14 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
       setNote('');
     }
   }, [initialTemplate, isOpen]);
+
+  const categories = financeCategoryNames('expense', financeCategories);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (categories.some((name) => name.toLowerCase() === category.toLowerCase())) return;
+    setCategory('Other');
+  }, [categories, category, isOpen]);
 
   if (!isOpen) return null;
 
@@ -140,15 +157,18 @@ export const BillTemplateModal: React.FC<BillTemplateModalProps> = ({
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Category
               </label>
-              <select
+              <CategorySelect
                 value={category}
-                onChange={(e) => setCategory(e.target.value)}
+                options={categories}
+                onChange={setCategory}
+                onAdd={(name) => onAddFinanceCategory('expense', name)}
+                canDelete={isCustomFinanceCategory(category, 'expense', financeCategories)}
+                onDelete={() => {
+                  onDeleteFinanceCategory('expense', category);
+                  setCategory('Other');
+                }}
                 className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                {EXPENSE_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">

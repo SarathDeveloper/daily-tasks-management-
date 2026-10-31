@@ -14,16 +14,16 @@ import {
 } from 'lucide-react';
 import type {
   Account,
+  FinanceCategory,
   FinanceTransaction,
   LedgerSettings,
   PaymentMethod,
   TransactionType,
 } from '../../types';
 import {
-  EXPENSE_CATEGORIES,
-  INCOME_CATEGORIES,
   ALL_PAYMENT_METHODS,
   accountTypeMeta,
+  financeCategoryNames,
 } from '../../data/financeCategories';
 import { formatPaise, formatRupeesCompact, toPaise } from '../../lib/money';
 import {
@@ -56,6 +56,7 @@ export interface LedgerViewProps {
   accounts: Account[];
   transactions: FinanceTransaction[];
   ledgerSettings: LedgerSettings[];
+  financeCategories: FinanceCategory[];
   selectedDate: string;
   onAddIncome: (accountId?: string) => void;
   onAddExpense: (accountId?: string) => void;
@@ -84,6 +85,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
   accounts,
   transactions,
   ledgerSettings,
+  financeCategories,
   selectedDate,
   onAddIncome,
   onAddExpense,
@@ -199,12 +201,10 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
     return Array.from(map.values());
   }, [filtered]);
 
-  const categories = useMemo(() => {
-    const used = new Set(
-      transactions.map((tx) => tx.category).filter((c) => c && c !== 'Transfer')
-    );
-    return [...new Set([...Array.from(used), ...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES])];
-  }, [transactions]);
+  const categories = useMemo(
+    () => financeCategoryNames('all', financeCategories, transactions.map((tx) => tx.category)),
+    [transactions, financeCategories]
+  );
 
   const hasFilters =
     search.trim() !== '' ||
@@ -248,6 +248,7 @@ export const LedgerView: React.FC<LedgerViewProps> = ({
         account={detailAccount}
         accounts={accounts}
         transactions={transactions}
+        financeCategories={financeCategories}
         onBack={() => setDetailAccountId(null)}
         onEditAccount={onEditAccount}
         onAddIncome={(id) => onAddIncome(id)}

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Filter, Plus, Calendar, CheckCircle2, Clock, Sparkles, Tag, ArrowUpDown, X } from 'lucide-react';
-import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm } from './types';
+import { Task, Category, NotificationSettings, ActiveTab, Priority, FinanceTransaction, MonthlyBudget, CategoryBudget, FinanceCategory, Debt, SavingsGoal, BudgetAlert, BudgetAlertState, BillTemplate, BillPayment, SavingsEntry, SavingsStreakState, Account, LedgerSettings, Goal, Habit, HabitCheckIn, HabitCheckInPatch, DiaryEntry, DiaryMood, Alarm } from './types';
 import { INITIAL_CATEGORIES } from './data/initialCategories';
 import { getInitialTasks } from './data/initialTasks';
 import { Header } from './components/Header';
@@ -44,7 +44,7 @@ import {
 } from './lib/savingsLedger';
 import { checkBudgetAlerts, formatAlertMessage } from './lib/budgetAlerts';
 import { currentTimeString, diaryCollectionFits, diaryPreview, isDiaryMood, sanitizeDiaryImages, validateDiaryDraft } from './lib/diary';
-import { DEFAULT_PAYMENT_METHOD } from './data/financeCategories';
+import { DEFAULT_PAYMENT_METHOD, financeCategoryError, isCustomFinanceCategory, normalizeCategoryName, reassignDeletedCategoryBudgets, sameCategoryName } from './data/financeCategories';
 import {
   buildAtmFee,
   buildIncomeOrExpense,
@@ -195,6 +195,7 @@ export default function App() {
   const userLedgerSettingsKey = storageKeys.ledgerSettings;
   const userBudgetsKey = storageKeys.budgets;
   const userCatBudgetsKey = storageKeys.categoryBudgets;
+  const userFinanceCategoriesKey = storageKeys.financeCategories;
   const userDebtsKey = storageKeys.debts;
   const userSavingsKey = storageKeys.savingsGoals;
   const userAlertStateKey = storageKeys.alertState;
@@ -276,6 +277,16 @@ export default function App() {
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Failed to parse category budgets:', e);
+    }
+    return [];
+  });
+
+  const [financeCategories, setFinanceCategories] = useState<FinanceCategory[]>(() => {
+    try {
+      const saved = localStorage.getItem(userFinanceCategoriesKey);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Failed to parse finance categories:', e);
     }
     return [];
   });
@@ -525,6 +536,9 @@ export default function App() {
       const savedCatBudgets = localStorage.getItem(userCatBudgetsKey);
       setCategoryBudgets(savedCatBudgets ? JSON.parse(savedCatBudgets) : []);
 
+      const savedFinanceCategories = localStorage.getItem(userFinanceCategoriesKey);
+      setFinanceCategories(savedFinanceCategories ? JSON.parse(savedFinanceCategories) : []);
+
       const savedDebts = localStorage.getItem(userDebtsKey);
       setDebts(savedDebts ? JSON.parse(savedDebts) : []);
 
@@ -582,7 +596,7 @@ export default function App() {
     } finally {
       setReadyHydrationToken(String(dataEpoch));
     }
-  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
+  }, [dataEpoch, userTasksKey, userCategoriesKey, userFinanceKey, userAccountsKey, userLedgerSettingsKey, userBudgetsKey, userCatBudgetsKey, userFinanceCategoriesKey, userDebtsKey, userSavingsKey, userSavingsEntriesKey, userAlertStateKey, userBillTemplatesKey, userBillPaymentsKey, userGoalsKey, userHabitsKey, userHabitCheckInsKey, userAlarmsKey, userDiaryKey, STORAGE_KEY_SETTINGS]);
 
   // Auto-Save Persistence
   usePersistJson(userTasksKey, tasks, canPersist);
@@ -592,6 +606,7 @@ export default function App() {
   usePersistJson(userLedgerSettingsKey, ledgerSettings, canPersist);
   usePersistJson(userBudgetsKey, budgets, canPersist);
   usePersistJson(userCatBudgetsKey, categoryBudgets, canPersist);
+  usePersistJson(userFinanceCategoriesKey, financeCategories, canPersist);
   usePersistJson(userDebtsKey, debts, canPersist);
   usePersistJson(userSavingsKey, savingsGoals, canPersist);
   usePersistJson(userAlertStateKey, budgetAlertState, canPersist);
@@ -633,6 +648,7 @@ export default function App() {
     ledgerSettings,
     budgets,
     categoryBudgets,
+    financeCategories,
     debts,
     savingsGoals,
     savingsEntries,
@@ -850,6 +866,7 @@ export default function App() {
       ledgerSettings,
       budgets,
       categoryBudgets,
+      financeCategories,
       debts,
       savingsGoals,
       savingsEntries,
@@ -1496,6 +1513,7 @@ export default function App() {
       ...ledgerSettings.map((s) => s.id),
       ...budgets.map((b) => b.id),
       ...categoryBudgets.map((b) => b.id),
+      ...financeCategories.map((c) => c.id),
       ...debts.map((d) => d.id),
       ...savingsGoals.map((g) => g.id),
       ...savingsEntries.map((e) => e.id),
@@ -1520,6 +1538,7 @@ export default function App() {
     setLedgerSettings([]);
     setBudgets([]);
     setCategoryBudgets([]);
+    setFinanceCategories([]);
     setDebts([]);
     setSavingsGoals([]);
     setBudgetAlertState({});
@@ -1546,6 +1565,7 @@ export default function App() {
       ledgerSettings,
       budgets,
       categoryBudgets,
+      financeCategories,
       debts,
       savingsGoals,
       savingsEntries,
@@ -1580,6 +1600,7 @@ export default function App() {
     if (present.includes('ledgerSettings')) setLedgerSettings(data.ledgerSettings ?? []);
     if (present.includes('budgets')) setBudgets(data.budgets ?? []);
     if (present.includes('categoryBudgets')) setCategoryBudgets(data.categoryBudgets ?? []);
+    if (present.includes('financeCategories')) setFinanceCategories(data.financeCategories ?? []);
     if (present.includes('debts')) setDebts(data.debts ?? []);
     if (present.includes('savingsGoals')) setSavingsGoals(data.savingsGoals ?? []);
     if (present.includes('savingsEntries')) setSavingsEntries(data.savingsEntries ?? []);
@@ -1628,6 +1649,7 @@ export default function App() {
       ledgerSettings,
       budgets,
       categoryBudgets,
+      financeCategories,
       debts,
       savingsGoals,
       savingsEntries,
@@ -1923,7 +1945,10 @@ export default function App() {
   };
 
   // Finance handlers
-  const handleSaveTransaction = (partial: Partial<FinanceTransaction>) => {
+  const handleSaveTransaction = (
+    partial: Partial<FinanceTransaction>,
+    options?: { allowOverdraft?: boolean }
+  ) => {
     const now = new Date();
     const nowIso = now.toISOString();
     if (partial.id) {
@@ -1972,8 +1997,12 @@ export default function App() {
       settings: ledgerSettings[0] || { allowNegativeBalance: false },
     });
     if (isLedgerError(validation)) {
-      window.alert(validation.message);
-      return false;
+      const alreadyLeftTheBank =
+        options?.allowOverdraft && validation.code === 'insufficient-balance';
+      if (!alreadyLeftTheBank) {
+        window.alert(validation.message);
+        return false;
+      }
     }
 
     const newTx = buildIncomeOrExpense(draft, { now });
@@ -2033,6 +2062,54 @@ export default function App() {
         },
       ];
     });
+  };
+
+  const handleAddFinanceCategory = (kind: 'income' | 'expense', raw: string): string | null => {
+    const error = financeCategoryError(raw, kind, financeCategories);
+    if (error) return error;
+    const name = normalizeCategoryName(raw);
+    const now = new Date().toISOString();
+    setFinanceCategories((prev) => {
+      if (financeCategoryError(name, kind, prev)) return prev;
+      return [
+        ...prev,
+        { id: `fincat-${Date.now()}`, name, kind, createdAt: now, updatedAt: now },
+      ];
+    });
+    return null;
+  };
+
+  const handleDeleteFinanceCategory = (kind: 'income' | 'expense', raw: string) => {
+    const name = normalizeCategoryName(raw);
+    if (!isCustomFinanceCategory(name, kind, financeCategories)) return;
+    const removed = financeCategories.filter(
+      (item) => item.kind === kind && sameCategoryName(item.name, name)
+    );
+    markDeleted(
+      storageKeys,
+      removed.map((item) => item.id)
+    );
+    const now = new Date().toISOString();
+    setFinanceCategories((prev) => prev.filter((item) => !removed.some((itemRemoved) => itemRemoved.id === item.id)));
+    setTransactions((prev) =>
+      prev.map((tx) =>
+        tx.type === kind && sameCategoryName(tx.category, name)
+          ? { ...tx, category: 'Other', updatedAt: now }
+          : tx
+      )
+    );
+    if (kind === 'expense') {
+      setBillTemplates((prev) =>
+        prev.map((bill) =>
+          sameCategoryName(bill.category, name) ? { ...bill, category: 'Other', updatedAt: now } : bill
+        )
+      );
+      setCategoryBudgets((prev) => {
+        const reassigned = reassignDeletedCategoryBudgets(prev, name, now);
+        if (reassigned.droppedIds.length > 0) markDeleted(storageKeys, reassigned.droppedIds);
+        return reassigned.budgets;
+      });
+    }
   };
 
   const handleSetCategoryBudget = (month: string, category: string, limit: number) => {
@@ -3138,6 +3215,9 @@ export default function App() {
             transactions={transactions}
             budgets={budgets}
             categoryBudgets={categoryBudgets}
+            financeCategories={financeCategories}
+            onAddFinanceCategory={handleAddFinanceCategory}
+            onDeleteFinanceCategory={handleDeleteFinanceCategory}
             debts={debts}
             savingsGoals={savingsGoals}
             billTemplates={billTemplates}
@@ -3149,6 +3229,7 @@ export default function App() {
               accounts,
               transactions,
               ledgerSettings,
+              financeCategories,
               selectedDate,
               onAddIncome: (accountId) => openFinanceModal(null, { type: 'income', accountId }),
               onAddExpense: (accountId) => openFinanceModal(null, { type: 'expense', accountId }),
@@ -3186,6 +3267,9 @@ export default function App() {
             onDeleteSavings={handleDeleteSavingsEntry}
             onQuickAddSavings={handleQuickAddSavings}
             onDismissAlert={handleDismissAlert}
+            onConfirmBankSms={(partial) =>
+              handleSaveTransaction(partial, { allowOverdraft: true }) === true
+            }
           />
         )}
       </main>
@@ -3245,6 +3329,9 @@ export default function App() {
           accounts={accounts}
           transactions={transactions}
           ledgerSettings={ledgerSettings}
+          financeCategories={financeCategories}
+          onAddFinanceCategory={handleAddFinanceCategory}
+          onDeleteFinanceCategory={handleDeleteFinanceCategory}
           initialType={financeDraftDefaults?.type}
           initialAccountId={financeDraftDefaults?.accountId}
         />
@@ -3304,6 +3391,9 @@ export default function App() {
         onSave={handleSaveBillTemplate}
         initialTemplate={editingBillTemplate}
         accounts={accounts}
+        financeCategories={financeCategories}
+        onAddFinanceCategory={handleAddFinanceCategory}
+        onDeleteFinanceCategory={handleDeleteFinanceCategory}
       />
 
       {/* Add / Edit Savings — a transfer into savings, gold, or stocks */}

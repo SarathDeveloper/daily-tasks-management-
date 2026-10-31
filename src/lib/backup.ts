@@ -6,6 +6,7 @@ import type {
   BudgetAlertState,
   Category,
   CategoryBudget,
+  FinanceCategory,
   Debt,
   DiaryEntry,
   FinanceTransaction,
@@ -32,6 +33,7 @@ export const BACKUP_ARRAY_KEYS = [
   'ledgerSettings',
   'budgets',
   'categoryBudgets',
+  'financeCategories',
   'debts',
   'savingsGoals',
   'savingsEntries',
@@ -55,6 +57,7 @@ export interface BackupCollections {
   ledgerSettings: LedgerSettings[];
   budgets: MonthlyBudget[];
   categoryBudgets: CategoryBudget[];
+  financeCategories: FinanceCategory[];
   debts: Debt[];
   savingsGoals: SavingsGoal[];
   savingsEntries: SavingsEntry[];
@@ -122,6 +125,7 @@ export function buildBackup(
     ledgerSettings: input.ledgerSettings,
     budgets: input.budgets,
     categoryBudgets: input.categoryBudgets,
+    financeCategories: input.financeCategories ?? [],
     debts: input.debts,
     savingsGoals: input.savingsGoals,
     savingsEntries: input.savingsEntries,
@@ -190,6 +194,8 @@ export function parseBackup(raw: unknown): ParsedBackup {
 
   for (const key of BACKUP_ARRAY_KEYS) {
     if (full) {
+      // Older backups omit this list. Leaving it absent keeps names already saved.
+      if (key === 'financeCategories' && obj[key] === undefined) continue;
       data[key] = (Array.isArray(obj[key]) ? obj[key] : []) as never;
       present.push(key);
     } else if (Array.isArray(obj[key])) {

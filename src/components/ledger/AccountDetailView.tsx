@@ -10,12 +10,11 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import type { Account, FinanceTransaction, TransactionType } from '../../types';
+import type { Account, FinanceCategory, FinanceTransaction, TransactionType } from '../../types';
 import {
-  EXPENSE_CATEGORIES,
-  INCOME_CATEGORIES,
   ALL_PAYMENT_METHODS,
   accountTypeMeta,
+  financeCategoryNames,
 } from '../../data/financeCategories';
 import { formatPaise, toPaise } from '../../lib/money';
 import {
@@ -34,6 +33,7 @@ interface AccountDetailViewProps {
   account: Account;
   accounts: Account[];
   transactions: FinanceTransaction[];
+  financeCategories: FinanceCategory[];
   onBack: () => void;
   onEditAccount: (account: Account) => void;
   onAddIncome: (accountId: string) => void;
@@ -47,6 +47,7 @@ export const AccountDetailView: React.FC<AccountDetailViewProps> = ({
   account,
   accounts,
   transactions,
+  financeCategories,
   onBack,
   onEditAccount,
   onAddIncome,
@@ -69,18 +70,10 @@ export const AccountDetailView: React.FC<AccountDetailViewProps> = ({
     : toPaise(account.openingBalance);
   const totals = useMemo(() => accountTotals(account.id, transactions), [account.id, transactions]);
 
-  const categories = useMemo(() => {
-    const used = new Set(
-      rows.map((r) => r.tx.category).filter((c) => c && c !== 'Transfer')
-    );
-    return [
-      ...new Set([
-        ...Array.from(used),
-        ...INCOME_CATEGORIES,
-        ...EXPENSE_CATEGORIES,
-      ]),
-    ];
-  }, [rows]);
+  const categories = useMemo(
+    () => financeCategoryNames('all', financeCategories, rows.map((row) => row.tx.category)),
+    [rows, financeCategories]
+  );
 
   const filtered = useMemo(() => {
     const matching = filterTransactions(

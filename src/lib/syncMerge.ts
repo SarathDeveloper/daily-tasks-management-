@@ -121,6 +121,11 @@ export function mergeEnvelopes(local: SyncEnvelope, remote: SyncEnvelope | null)
       remote.data.categoryBudgets,
       tombstones
     ),
+    financeCategories: mergeCollection(
+      local.data.financeCategories ?? [],
+      remote.data.financeCategories ?? [],
+      tombstones
+    ),
     debts: mergeCollection(local.data.debts, remote.data.debts, tombstones),
     savingsGoals: mergeCollection(local.data.savingsGoals, remote.data.savingsGoals, tombstones),
     savingsEntries: mergeCollection(
@@ -179,6 +184,7 @@ export function isEnvelopeEmpty(envelope: SyncEnvelope | null): boolean {
       (data.ledgerSettings?.length ?? 0) === 0 &&
       data.budgets.length === 0 &&
       data.categoryBudgets.length === 0 &&
+      (data.financeCategories?.length ?? 0) === 0 &&
       data.debts.length === 0 &&
       data.savingsGoals.length === 0 &&
       data.savingsEntries.length === 0 &&
@@ -219,5 +225,6 @@ export function isValidEnvelope(value: unknown): value is SyncEnvelope {
   if (data.habitCheckIns !== undefined && !Array.isArray(data.habitCheckIns)) return false;
   if (data.alarms !== undefined && !Array.isArray(data.alarms)) return false;
   if (data.diaryEntries !== undefined && !Array.isArray(data.diaryEntries)) return false;
+  if (data.financeCategories !== undefined && !Array.isArray(data.financeCategories)) return false;
   return true;
 }

@@ -18,6 +18,7 @@ const emptyCollections = (): BackupCollections => ({
   ledgerSettings: [],
   budgets: [],
   categoryBudgets: [],
+  financeCategories: [],
   debts: [],
   savingsGoals: [],
   savingsEntries: [],
@@ -84,6 +85,8 @@ describe('buildBackup / parseBackup', () => {
     expect(parsed.mode).toBe('full');
     expect(parsed.data.tasks).toEqual([]);
     expect(parsed.data.alarms).toEqual([]);
+    expect(parsed.data.financeCategories).toBeUndefined();
+    expect(parsed.present).not.toContain('financeCategories');
     expect(parsed.data.settings).toEqual(DEFAULT_SETTINGS);
     expect(parsed.present).toContain('settings');
   });

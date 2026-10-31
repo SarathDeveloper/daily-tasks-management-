@@ -24,12 +24,10 @@ import {
 import { mergeEnvelopes } from '../lib/syncMerge';
 import {
   DriveAuthError,
-  createSyncFile,
-  downloadSyncFile,
-  findSyncFile,
-  legacySyncFileName,
-  syncFileNameFor,
-  updateSyncFile,
+  DriveScopeError,
+  loadCloudSnapshot,
+  saveCloudSnapshot,
+  snapshotsMatch,
 } from '../services/driveSyncService';
 import {
   GoogleAuthError,
@@ -44,6 +42,7 @@ import {
   hasPendingRedirectAccount,
   isGoogleSignInConfigured,
   isNativePlatform,
+  preloadGoogleSignIn,
   readBootOAuthNotice,
   type GoogleAccount,
 } from '../services/googleAuthService';
@@ -104,6 +103,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   const [error, setError] = useState<string | null>(bootNotice);
 
   const busyRef = useRef(false);
+  const pendingModeRef = useRef<SyncMode | null>(null);
   const connectingRef = useRef(false);
   const connectGeneration = useRef(0);
   const keysRef = useRef<StorageKeys>(keys);
@@ -144,7 +144,10 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   const runSync = useCallback(
     async (mode: SyncMode, opts: { silent?: boolean } = {}) => {
       if (!enabled || !isGoogleSignInConfigured()) return;
-      if (busyRef.current) return;
+      if (busyRef.current) {
+        pendingModeRef.current = mode;
+        return;
+      }
 
       const storedAccount = getStoredAccount();
       if (!storedAccount) {
@@ -156,7 +159,7 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       const token = getCachedAccessToken();
       if (!token) {
         setStatus('needs-auth');
-        setError('Google Drive session expired. Tap Reconnect to keep syncing.');
+        setError('Reconnect and allow Google Drive access so backups can upload and download.');
         return;
       }
 
@@ -165,57 +168,50 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
       setStatus('syncing');
 
       const storageKeys = keysRef.current;
-      const fileName = syncFileNameFor();
 
       try {
-        const existing = await findSyncFile(token, fileName);
+        const cloud = await loadCloudSnapshot(token, readLegacyDriveProfileId());
 
         if (mode === 'restore') {
-          if (!existing) {
-            throw new Error('No cloud backup found yet.');
+          const pieces = [cloud.visible, ...cloud.hidden].filter((piece): piece is SyncEnvelope => piece !== null);
+          if (pieces.length === 0) throw new Error('No cloud backup found in Google Drive yet.');
+          let restored = pieces[0];
+          for (const extra of pieces.slice(1)) {
+            const paired = preferRealTaskLists(restored, extra);
+            restored = mergeEnvelopes(paired.left, paired.right);
           }
-          const remote = await downloadSyncFile(token, existing.id);
-          if (!remote) throw new Error('The cloud backup could not be read.');
-          applyEnvelope(remote, storageKeys);
+          applyEnvelope(restored, storageKeys);
+          if (!cloud.file || !cloud.visible || !snapshotsMatch(cloud.visible, restored)) {
+            await saveCloudSnapshot(token, cloud.folderId, cloud.file, restored);
+          }
+          clearLegacyDriveProfileId();
           setStatus('idle');
           setError(null);
           return;
         }
 
-        const downloaded = existing ? await downloadSyncFile(token, existing.id) : null;
         const stored = buildLocalEnvelope(storageKeys);
         let local = stored;
-        const legacyId = readLegacyDriveProfileId();
-        let legacy: SyncEnvelope | null = null;
-        if (legacyId) {
-          const legacyFile = await findSyncFile(token, legacySyncFileName(legacyId));
-          if (legacyFile) legacy = await downloadSyncFile(token, legacyFile.id);
-        }
-        // Compare against the original download. A stripped copy is only for the merge.
-        if (legacy) {
-          const paired = preferRealTaskLists(local, legacy);
+        for (const hidden of cloud.hidden) {
+          const paired = preferRealTaskLists(local, hidden);
           local = mergeEnvelopes(paired.left, paired.right);
         }
-        const pairedWithRemote = preferRealTaskLists(local, downloaded);
+        const pairedWithRemote = preferRealTaskLists(local, cloud.visible);
         local = pairedWithRemote.left;
         const merged = mergeEnvelopes(local, pairedWithRemote.right);
 
-        const remoteMatchesMerged =
-          downloaded !== null &&
-          envelopesMatch(downloaded, merged) &&
-          envelopesMatch(local, merged);
+        const visibleAlreadyMatches =
+          cloud.file !== null &&
+          cloud.visible !== null &&
+          snapshotsMatch(cloud.visible, merged) &&
+          snapshotsMatch(local, merged);
 
-        if (!remoteMatchesMerged) {
-          if (existing) {
-            await updateSyncFile(token, existing.id, merged);
-          } else {
-            await createSyncFile(token, fileName, merged);
-          }
+        if (!visibleAlreadyMatches) {
+          await saveCloudSnapshot(token, cloud.folderId, cloud.file, merged);
         }
 
-        // Write back when Drive or the one-time legacy file changed this device.
-        // A starter-only day is dropped before that compare, so it is not uploaded.
-        if (!envelopesMatch(stored, merged)) {
+        // Write back when Drive or a one-time hidden file changed this device.
+        if (!snapshotsMatch(stored, merged)) {
           applyEnvelope(merged, storageKeys);
         } else {
           const meta = readSyncMeta(storageKeys);
@@ -224,28 +220,37 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
           setLastSyncedAt(syncedAt);
         }
 
-        if (legacyId) clearLegacyDriveProfileId();
+        clearLegacyDriveProfileId();
         setStatus('idle');
         setError(null);
       } catch (e) {
-        if (e instanceof DriveAuthError) {
+        if (e instanceof DriveAuthError || e instanceof DriveScopeError) {
+          pendingModeRef.current = null;
           clearCachedAccessToken();
           setStatus('needs-auth');
-          setError('Google Drive access expired. Tap Reconnect to resume syncing.');
+          setError(
+            e instanceof DriveScopeError
+              ? e.message
+              : 'Google Drive access expired. Tap Reconnect to resume syncing.'
+          );
         } else {
           const message = e instanceof Error ? e.message : String(e);
-          // A valid Drive token still means the account is linked. The sync
-          // error sits under that status instead of turning the button into Reconnect.
-          if (getStoredAccount() && getCachedAccessToken()) setStatus('idle');
-          else setStatus('error');
+          setStatus(getStoredAccount() ? 'error' : 'disconnected');
           setError(message);
         }
       } finally {
         busyRef.current = false;
+        const pending = pendingModeRef.current;
+        pendingModeRef.current = null;
+        if (pending) void runSync(pending, { silent: true });
       }
     },
     [applyEnvelope, buildLocalEnvelope, enabled]
   );
+
+  useEffect(() => {
+    if (configured) preloadGoogleSignIn();
+  }, [configured]);
 
   // Finish a redirect that was still in the URL, then sync. The account is
   // applied even if this effect cleans up, because Strict Mode does that
@@ -442,14 +447,3 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   };
 }
 
-/** Structural comparison ignoring volatile envelope metadata. */
-function envelopesMatch(a: SyncEnvelope, b: SyncEnvelope): boolean {
-  try {
-    return (
-      JSON.stringify(a.data) === JSON.stringify(b.data) &&
-      JSON.stringify(a.tombstones) === JSON.stringify(b.tombstones)
-    );
-  } catch {
-    return false;
-  }
-}

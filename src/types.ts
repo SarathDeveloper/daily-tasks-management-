@@ -295,6 +295,15 @@ export interface CategoryBudget {
   updatedAt?: string;
 }
 
+/** A money category the user added. Built-in names stay in the category lists. */
+export interface FinanceCategory {
+  id: string;
+  name: string;
+  kind: 'income' | 'expense';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type DebtDirection = 'lent' | 'owed';
 
 export interface Debt {

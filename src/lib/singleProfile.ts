@@ -122,6 +122,7 @@ function writeMergedSnapshot(
     'ledgerSettings',
     'budgets',
     'categoryBudgets',
+    'financeCategories',
     'debts',
     'savingsGoals',
     'savingsEntries',
@@ -169,6 +170,11 @@ function mergeSnapshots(globalData: SyncData, profileData: SyncData, tombstones:
     categoryBudgets: mergeCollection(
       globalData.categoryBudgets,
       profileData.categoryBudgets,
+      tombstones
+    ),
+    financeCategories: mergeCollection(
+      globalData.financeCategories ?? [],
+      profileData.financeCategories ?? [],
       tombstones
     ),
     debts: mergeCollection(globalData.debts, profileData.debts, tombstones),

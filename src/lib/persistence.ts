@@ -13,6 +13,7 @@ import type {
   BillTemplate,
   Category,
   CategoryBudget,
+  FinanceCategory,
   Debt,
   FinanceTransaction,
   DiaryEntry,
@@ -35,6 +36,7 @@ export interface StorageKeys {
   ledgerSettings: string;
   budgets: string;
   categoryBudgets: string;
+  financeCategories: string;
   debts: string;
   savingsGoals: string;
   savingsEntries: string;
@@ -58,6 +60,7 @@ const GLOBAL_KEYS: StorageKeys = {
   ledgerSettings: 'daily_finance_ledger_settings_v1',
   budgets: 'daily_finance_budgets_v1',
   categoryBudgets: 'daily_finance_category_budgets_v1',
+  financeCategories: 'daily_finance_custom_categories_v1',
   debts: 'daily_finance_debts_v1',
   savingsGoals: 'daily_finance_savings_goals_v1',
   savingsEntries: 'daily_finance_savings_entries_v1',
@@ -88,6 +91,7 @@ export function getStorageKeys(userId?: string | null): StorageKeys {
     ledgerSettings: `daily_finance_ledger_settings_${userId}`,
     budgets: `daily_finance_budgets_${userId}`,
     categoryBudgets: `daily_finance_category_budgets_${userId}`,
+    financeCategories: `daily_finance_custom_categories_${userId}`,
     debts: `daily_finance_debts_${userId}`,
     savingsGoals: `daily_finance_savings_goals_${userId}`,
     savingsEntries: `daily_finance_savings_entries_${userId}`,
@@ -149,6 +153,8 @@ export interface SyncData {
   ledgerSettings: LedgerSettings[];
   budgets: MonthlyBudget[];
   categoryBudgets: CategoryBudget[];
+  /** Omitted by older snapshots. Readers treat a missing list as empty. */
+  financeCategories?: FinanceCategory[];
   debts: Debt[];
   savingsGoals: SavingsGoal[];
   savingsEntries: SavingsEntry[];
@@ -163,7 +169,7 @@ export interface SyncData {
 }
 
 /**
- * The JSON document stored in Drive's hidden appDataFolder.
+ * The JSON document stored in Google Drive at Dayflow/daily-tasks-sync.json.
  * `tombstones` maps a deleted record id to the ISO timestamp of the deletion so
  * a merge on the other device does not resurrect it.
  */
@@ -185,6 +191,7 @@ export function readSnapshot(keys: StorageKeys): SyncData {
     ledgerSettings: readJson<LedgerSettings[]>(keys.ledgerSettings, []),
     budgets: readJson<MonthlyBudget[]>(keys.budgets, []),
     categoryBudgets: readJson<CategoryBudget[]>(keys.categoryBudgets, []),
+    financeCategories: readJson<FinanceCategory[]>(keys.financeCategories, []),
     debts: readJson<Debt[]>(keys.debts, []),
     savingsGoals: readJson<SavingsGoal[]>(keys.savingsGoals, []),
     savingsEntries: readJson<SavingsEntry[]>(keys.savingsEntries, []),
@@ -210,6 +217,7 @@ export function writeSnapshot(keys: StorageKeys, data: SyncData): void {
   writeJson(keys.ledgerSettings, data.ledgerSettings ?? []);
   writeJson(keys.budgets, data.budgets);
   writeJson(keys.categoryBudgets, data.categoryBudgets);
+  writeJson(keys.financeCategories, data.financeCategories ?? []);
   writeJson(keys.debts, data.debts);
   writeJson(keys.savingsGoals, data.savingsGoals);
   writeJson(keys.savingsEntries, data.savingsEntries);
@@ -232,6 +240,7 @@ export function countRecords(data: SyncData): number {
     (data.ledgerSettings?.length ?? 0) +
     data.budgets.length +
     data.categoryBudgets.length +
+    (data.financeCategories?.length ?? 0) +
     data.debts.length +
     data.savingsGoals.length +
     data.savingsEntries.length +
