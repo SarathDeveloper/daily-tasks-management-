@@ -12,6 +12,7 @@ import { Header } from './components/Header';
 import { DateBar } from './components/DateBar';
 import { CalendarView } from './components/CalendarView';
 import { TaskCard } from './components/TaskCard';
+import { QuickAddBar } from './components/QuickAddBar';
 import { TaskModal } from './components/TaskModal';
 import { TimelineView } from './components/TimelineView';
 import { FocusRoom } from './components/FocusRoom';
@@ -130,6 +131,8 @@ import {
 } from './lib/alarms';
 import { hasLocalMusic } from './lib/localMusic';
 import { DayflowAlarm } from './services/dayflowAlarm';
+import { clearHomeWidgets, updateHomeWidgets } from './services/homeWidgets';
+import { buildWidgetSnapshot } from './lib/widgetSnapshot';
 import { audioService } from './services/audioService';
 import { habitBlockReason, isComplete, isDueToday, isScheduledOn, isSkipped, todayDateString } from './lib/habits';
 import { useCloudSync } from './hooks/useCloudSync';
@@ -819,6 +822,21 @@ export default function App() {
       cancelled = true;
     };
   }, [settings.localMusicName]);
+
+  // Home-screen widgets show task titles and spending, so they stay blank while
+  // app lock is on. A short delay batches bursts of edits into one update.
+  // `widgetDay` re-pushes after midnight on the next render, e.g. app resume.
+  const widgetDay = todayString();
+  useEffect(() => {
+    if (!isNativeAndroid()) return;
+    const timer = window.setTimeout(() => {
+      const push = isAppLockEnabled()
+        ? clearHomeWidgets()
+        : updateHomeWidgets(buildWidgetSnapshot(widgetDay, tasks, transactions, budgets));
+      void push.catch((e) => console.warn('Failed to update home widgets:', e));
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [tasks, transactions, budgets, appLocked, widgetDay]);
 
   const pushNativeSchedule = useCallback((granted: boolean) => {
     if (!isNativeAndroid()) return;
@@ -3000,6 +3018,8 @@ export default function App() {
                 onDismiss={dismissReminderNotice}
               />
             )}
+
+            <QuickAddBar categories={categories} defaultDate={selectedDate} onAdd={handleSaveTask} />
 
             {/* Daily Completion Progress Banner */}
             <div className="bg-gradient-to-r from-blue-50/60 via-white to-blue-50/40 dark:from-slate-900 dark:via-indigo-950/60 dark:to-slate-900 border border-blue-200/60 dark:border-indigo-900/40 rounded-2xl p-3 sm:p-4 flex items-center justify-between shadow-sm transition-colors">

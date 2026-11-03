@@ -30,8 +30,13 @@ interface DayflowAlarmPlugin {
   stopPreview(): Promise<void>;
   sync(options: { plans: NativeRingPlan[] }): Promise<void>;
   consumeEvents(): Promise<{ events: AlarmEvent[] }>;
-  /** Open the Android share sheet for a JSON backup. The file stays in app cache. */
-  shareBackup(options: { filename: string; contents: string }): Promise<void>;
+  /** Open the Android share sheet for a text file (a JSON backup by default). The file stays in app cache. */
+  shareBackup(options: {
+    filename: string;
+    contents: string;
+    mimeType?: string;
+    title?: string;
+  }): Promise<void>;
   pickBackupFolder(): Promise<{ name: string }>;
   getBackupFolder(): Promise<{ has: boolean; lost: boolean; name: string }>;
   clearBackupFolder(): Promise<void>;

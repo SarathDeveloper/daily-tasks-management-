@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_tasks_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/widget_tasks_title"
+            android:textColor="@color/widget_accent"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_tasks_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/widget_text_muted"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_tasks_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:textColor="@color/widget_text_muted"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/widget_task_1"
+        style="@style/DayflowWidgetTaskRow" />
+
+    <TextView
+        android:id="@+id/widget_task_2"
+        style="@style/DayflowWidgetTaskRow" />
+
+    <TextView
+        android:id="@+id/widget_task_3"
+        style="@style/DayflowWidgetTaskRow" />
+
+    <TextView
+        android:id="@+id/widget_task_4"
+        style="@style/DayflowWidgetTaskRow" />
+
+    <TextView
+        android:id="@+id/widget_task_5"
+        style="@style/DayflowWidgetTaskRow" />
+</LinearLayout>

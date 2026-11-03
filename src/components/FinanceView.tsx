@@ -68,6 +68,7 @@ import { Card } from './ui/Card';
 import { Dropdown } from './ui/Dropdown';
 import { FinanceAlertBanner } from './FinanceAlertBanner';
 import { BankSmsInbox } from './BankSmsInbox';
+import { MonthlyReportCard } from './MonthlyReportCard';
 import { LedgerView, type LedgerViewProps } from './ledger/LedgerView';
 
 interface FinanceViewProps {
@@ -1061,6 +1062,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
               <p className="text-xl font-black text-slate-900 dark:text-white">{monthlyTx.length}</p>
             </Card>
           </div>
+
+          <MonthlyReportCard transactions={transactions} accounts={ledger.accounts} month={selectedMonth} />
 
           {/* Daily spend chart */}
           {dailySpendMonth.some((d) => d.amount > 0) && (

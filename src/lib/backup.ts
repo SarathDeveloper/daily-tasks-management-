@@ -243,8 +243,13 @@ export function isShareCancel(error: unknown): boolean {
  * Share the backup when the device can hand a file to another app.
  * Otherwise download it. The object URL stays alive long enough for the download to start.
  */
-export async function saveBackupFile(contents: string, filename: string): Promise<void> {
-  const file = new File([contents], filename, { type: 'application/json' });
+export async function saveBackupFile(
+  contents: string,
+  filename: string,
+  options: { type?: string; title?: string } = {}
+): Promise<void> {
+  const type = options.type ?? 'application/json';
+  const file = new File([contents], filename, { type });
   let canShareFiles = false;
   try {
     canShareFiles =
@@ -257,14 +262,14 @@ export async function saveBackupFile(contents: string, filename: string): Promis
 
   if (canShareFiles) {
     try {
-      await navigator.share({ files: [file], title: 'Dayflow backup' });
+      await navigator.share({ files: [file], title: options.title ?? 'Dayflow backup' });
       return;
     } catch (error) {
       if (isShareCancel(error)) throw error;
     }
   }
 
-  const blob = new Blob([contents], { type: 'application/json' });
+  const blob = new Blob([contents], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

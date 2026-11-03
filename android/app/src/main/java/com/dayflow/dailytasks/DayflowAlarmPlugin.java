@@ -155,11 +155,13 @@ public class DayflowAlarmPlugin extends Plugin {
             String authority = getContext().getPackageName() + ".fileprovider";
             Uri uri = FileProvider.getUriForFile(getContext(), authority, file);
             Intent send = new Intent(Intent.ACTION_SEND);
-            send.setType("application/json");
+            String mimeType = call.getString("mimeType", "application/json");
+            send.setType(mimeType == null ? "application/json" : mimeType);
             send.putExtra(Intent.EXTRA_STREAM, uri);
             send.setClipData(ClipData.newRawUri("", uri));
             send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            Intent chooser = Intent.createChooser(send, "Save Dayflow backup");
+            String title = call.getString("title", "Save Dayflow backup");
+            Intent chooser = Intent.createChooser(send, title == null ? "Save Dayflow backup" : title);
             chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             getActivity().startActivity(chooser);
             call.resolve();

@@ -15,6 +15,7 @@ import {
   type PendingBankSms,
 } from '../lib/bankSmsInbox';
 import { smsFingerprint } from '../lib/bankSmsParse';
+import { suggestCategory } from '../lib/merchantCategory';
 import { isNativeAndroid } from '../lib/platform';
 import { BankSms } from '../services/bankSms';
 import { Button } from './ui/Button';
@@ -109,7 +110,20 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
 
   const activeAccounts = accounts.filter((account) => !account.isArchived);
 
-  const categoryFor = (item: PendingBankSms) => edits[item.id]?.category ?? item.category ?? 'Other';
+  /** Category the merchant suggests when the row still says Other and was not edited. */
+  const suggestedFor = (item: PendingBankSms) => {
+    if (edits[item.id]?.category !== undefined) return undefined;
+    if (item.category && item.category !== 'Other') return undefined;
+    return suggestCategory(
+      item.merchant,
+      item.type,
+      transactions,
+      financeCategoryNames(item.type, financeCategories)
+    );
+  };
+
+  const categoryFor = (item: PendingBankSms) =>
+    edits[item.id]?.category ?? suggestedFor(item) ?? item.category ?? 'Other';
 
   const accountFor = (item: PendingBankSms) => {
     if (edits[item.id] && edits[item.id].accountId !== undefined) return edits[item.id].accountId ?? '';
@@ -263,6 +277,11 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
                     </option>
                   ))}
                 </select>
+                {suggestedFor(item) && (
+                  <span className="block text-[11px] text-indigo-600 dark:text-indigo-400 mt-1">
+                    Suggested from {item.merchant}
+                  </span>
+                )}
               </label>
               <label className="block">
                 <span className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">

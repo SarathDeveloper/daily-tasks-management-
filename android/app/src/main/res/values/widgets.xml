@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_tasks_title">Today</string>
+    <string name="widget_tasks_label">Dayflow tasks</string>
+    <string name="widget_tasks_description">Today\'s tasks at a glance</string>
+    <string name="widget_spend_title">Spent today</string>
+    <string name="widget_spend_label">Dayflow spending</string>
+    <string name="widget_spend_description">Today\'s and this month\'s spending</string>
+
+    <style name="DayflowWidgetTaskRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">6dp</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">@color/widget_text</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:visibility">gone</item>
+    </style>
+</resources>
