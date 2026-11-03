@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.content.ComponentName;
 import android.content.Context;
 import android.os.Bundle;
+import android.provider.Telephony;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 
@@ -12,18 +13,18 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Reads bank debit and credit texts out of the messaging app's notification.
+ * Reads bank debit and credit texts out of the SMS app's notification.
  *
- * This replaces the SMS permission path on purpose: Android only grants
- * READ_SMS/RECEIVE_SMS to the default SMS app, and Play Protect refuses to
- * install sideloaded APKs that ask for it. Notification access is a normal
- * Settings toggle instead.
+ * Only SMS apps are read: chat apps (WhatsApp, Telegram, ...) are ignored even
+ * though their notifications are also tagged as messages. OTP texts are
+ * dropped before anything is stored.
+ *
+ * Play Protect's enhanced fraud protection blocks installing an APK that
+ * declares this listener when it is sideloaded from a browser, chat app or
+ * file manager. Install over USB (npm run apk:install) instead.
  */
 public class BankSmsNotificationService extends NotificationListenerService {
-    /**
-     * Known messaging packages. A notification is also accepted when it is
-     * tagged CATEGORY_MESSAGE, which covers OEM messaging apps not listed here.
-     */
+    /** Known SMS apps. The phone's default SMS app is accepted too, whatever its package. */
     private static final Set<String> MESSAGING_PACKAGES = new HashSet<>();
 
     static {
@@ -42,16 +43,15 @@ public class BankSmsNotificationService extends NotificationListenerService {
         MESSAGING_PACKAGES.add("com.google.android.apps.messaging.rcs");
     }
 
-    static boolean isMessagingApp(String packageName, String category) {
+    static boolean isSmsApp(Context context, String packageName) {
         if (packageName == null) return false;
         if (MESSAGING_PACKAGES.contains(packageName.toLowerCase(Locale.ROOT))) return true;
-        return Notification.CATEGORY_MESSAGE.equals(category);
-    }
-
-    /** Known SMS apps are trusted; anything else must look like a bank message. */
-    private static boolean isSmsApp(String packageName) {
-        return packageName != null
-                && MESSAGING_PACKAGES.contains(packageName.toLowerCase(Locale.ROOT));
+        try {
+            // Needs no permission; covers OEM SMS apps missing from the list.
+            return packageName.equals(Telephony.Sms.getDefaultSmsPackage(context));
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     static boolean isEnabled(Context context) {
@@ -90,8 +90,9 @@ public class BankSmsNotificationService extends NotificationListenerService {
     public void onNotificationPosted(StatusBarNotification sbn) {
         if (sbn == null || sbn.getNotification() == null) return;
         Notification notification = sbn.getNotification();
-        if (!isMessagingApp(sbn.getPackageName(), notification.category)) return;
-        boolean requireAccountSignal = !isSmsApp(sbn.getPackageName());
+        if (!isSmsApp(this, sbn.getPackageName())) return;
+        // SMS apps also show personal texts, so a bank-shaped reference is required.
+        boolean requireAccountSignal = true;
         Bundle extras = notification.extras;
         if (extras == null) return;
         String fallbackTitle = text(extras.getCharSequence(Notification.EXTRA_TITLE));

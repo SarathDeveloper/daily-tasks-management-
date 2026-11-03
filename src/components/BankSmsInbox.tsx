@@ -194,7 +194,7 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             {enabled
               ? 'Debits and credits from bank texts wait here. They join the ledger only after you confirm.'
-              : 'Dayflow reads the bank text from the messages notification. Nothing is saved until you confirm.'}
+              : 'Dayflow reads bank texts from your SMS app’s notifications only: never chat apps, never OTPs. Nothing is saved until you confirm.'}
           </p>
         </div>
       </div>

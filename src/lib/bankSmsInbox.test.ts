@@ -83,9 +83,9 @@ describe('bank SMS inbox', () => {
       category: 'Other',
       merchant: 'SWIGGY',
     });
-    expect(next.pending[0].body).toContain('debited');
+    expect(next.pending[0]).not.toHaveProperty('body');
     expect(next.handled).toHaveLength(1);
-    expect(next.pending.some((item) => item.body.includes('OTP'))).toBe(false);
+    expect(next.pending).toHaveLength(1);
   });
 
   it('does not queue a message that was already handled or is already pending', () => {

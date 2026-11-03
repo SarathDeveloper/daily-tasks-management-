@@ -33,6 +33,7 @@ export function smsFingerprint(address: string, body: string): string {
 export function parseBankSms(message: RawBankSms): ParsedBankSms | null {
   const body = message.body?.replace(/\s+/g, ' ').trim() ?? '';
   if (!body) return null;
+  if (looksLikeOtp(body)) return null;
   const type = movement(body);
   if (!type || isBillReminder(body)) return null;
   const amount = parseAmount(body);
@@ -82,6 +83,15 @@ function firstOf(...indexes: number[]): number | null {
   const values = indexes.filter((value) => value >= 0);
   if (values.length === 0) return null;
   return Math.min(...values);
+}
+
+/** Mirrors BankSmsStore.looksLikeOtp: codes are never turned into entries. */
+export function looksLikeOtp(body: string): boolean {
+  const lower = body.toLowerCase();
+  return (
+    /\b(?:otp|one[ -]?time[ -]?pass(?:word|code)?|verification code|security code|authentication code|auth code|cvv)\b/.test(lower) ||
+    /\bcode\s*(?:is|:)\s*\d{4,8}\b/.test(lower)
+  );
 }
 
 function isBillReminder(body: string): boolean {

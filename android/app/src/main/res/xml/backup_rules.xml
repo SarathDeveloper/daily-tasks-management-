@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 11 and older. Only exclusions are listed, so everything else is still
+  backed up. Raw bank texts waiting to be confirmed never leave the phone; the
+  widget snapshot is rebuilt by the app.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="dayflow_bank_sms.xml" />
+    <exclude domain="sharedpref" path="dayflow_widgets.xml" />
+</full-backup-content>

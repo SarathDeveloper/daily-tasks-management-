@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nowTimeString, todayString } from './ledger';
-import { parseBankSms, smsFingerprint, type RawBankSms } from './bankSmsParse';
+import { looksLikeOtp, parseBankSms, smsFingerprint, type RawBankSms } from './bankSmsParse';
 
 const at = Date.parse('2026-10-31T09:15:00+05:30');
 
@@ -9,6 +9,15 @@ function sms(body: string, address = 'VK-HDFCBK'): RawBankSms {
 }
 
 describe('parseBankSms', () => {
+  it('never turns an OTP or verification code into an entry', () => {
+    expect(looksLikeOtp('OTP 482913 for txn of Rs 2,500.00 at AMAZON on card XX1234. Do not share.')).toBe(true);
+    expect(parseBankSms(sms('OTP 482913 for txn of Rs 2,500.00 debited at AMAZON on card XX1234'))).toBeNull();
+    expect(parseBankSms(sms('Your verification code is 1234 to approve Rs 500 debited from A/c XX99'))).toBeNull();
+    expect(parseBankSms(sms('Use code: 556677 to pay Rs 100 spent on card XX12'))).toBeNull();
+    expect(looksLikeOtp('INR 1,250.00 debited from A/c **1234 to SWIGGY')).toBe(false);
+    expect(looksLikeOtp('Rs 200 spent at Hotspot Cafe')).toBe(false);
+  });
+
   it('reads a debit and ignores the available balance', () => {
     const parsed = parseBankSms(
       sms('INR 1,250.00 debited from A/c **1234 on 31-10-26 to SWIGGY. Avl Bal INR 8,432.10')

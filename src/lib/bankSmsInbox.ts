@@ -10,8 +10,8 @@ import {
 
 /**
  * Pending bank SMS and the ids already confirmed, dismissed, or ignored.
- * These keys are intentionally outside SyncData and backups. The raw SMS body
- * lives only until the row is confirmed or dismissed.
+ * These keys are intentionally outside SyncData and backups. Only the parsed
+ * fields are kept; the raw SMS text is never stored here.
  */
 export const BANK_SMS_PENDING_KEY = 'dayflow_bank_sms_pending_v1';
 export const BANK_SMS_HANDLED_KEY = 'dayflow_bank_sms_handled_v1';
@@ -24,7 +24,6 @@ export interface PendingBankSms extends ParsedBankSms {
   category: string;
   accountId?: string;
   receivedAt: number;
-  body: string;
 }
 
 export interface BankSmsState {
@@ -84,7 +83,6 @@ export function ingestBankMessages(
       category: 'Other',
       accountId: matchLastFour(parsed.lastFour, accounts),
       receivedAt: message.receivedAt,
-      body,
     });
     pendingIds.add(id);
   }

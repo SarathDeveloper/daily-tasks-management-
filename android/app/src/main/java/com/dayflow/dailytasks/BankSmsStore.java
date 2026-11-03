@@ -10,6 +10,7 @@ import org.json.JSONObject;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * On-device queue for bank SMS that arrive while the WebView is not running.
@@ -20,11 +21,22 @@ final class BankSmsStore {
     private static final String KEY_QUEUE = "queue";
     private static final int MAX_QUEUE = 80;
     private static final int MAX_BODY = 500;
+    private static final Pattern OTP_WORDS = Pattern.compile(
+            "\\b(otp|one[ -]?time[ -]?pass(word|code)?|verification code|security code|authentication code|auth code|cvv)\\b");
+    private static final Pattern OTP_CODE = Pattern.compile("\\bcode\\s*(is|:)\\s*\\d{4,8}\\b");
 
     private BankSmsStore() {}
 
+    /** OTPs and verification codes are never stored, even when they mention an amount. */
+    static boolean looksLikeOtp(String body) {
+        if (body == null) return false;
+        String lower = body.toLowerCase(Locale.ROOT);
+        return OTP_WORDS.matcher(lower).find() || OTP_CODE.matcher(lower).find();
+    }
+
     static boolean looksLikeBankMoney(String body) {
         if (body == null) return false;
+        if (looksLikeOtp(body)) return false;
         String lower = body.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
         if (lower.length() < 12 || lower.length() > 700) return false;
         boolean movement = lower.contains("debited")
@@ -47,9 +59,8 @@ final class BankSmsStore {
     }
 
     /**
-     * Bank-message shape: an account, card, or UPI reference. Used to keep
-     * chat apps that post CATEGORY_MESSAGE notifications ("I paid Rs 500")
-     * out of the pending list.
+     * Bank-message shape: an account, card, or UPI reference. Keeps personal
+     * texts in the SMS app ("I paid Rs 500") out of the pending list.
      */
     static boolean hasAccountSignal(String body) {
         if (body == null) return false;
