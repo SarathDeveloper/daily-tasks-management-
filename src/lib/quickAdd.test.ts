@@ -52,6 +52,16 @@ describe('parseQuickAdd', () => {
     expect(parse('Meditate daily').recurrence).toEqual({ type: 'daily' });
   });
 
+  it('reads multi-week and every-other repeats', () => {
+    expect(parse('Pay card every 2 weeks').recurrence).toEqual({ type: 'custom', intervalDays: 14 });
+    expect(parse('Clean fridge every other week').recurrence).toEqual({ type: 'custom', intervalDays: 14 });
+    expect(parse('Payroll fortnightly').recurrence).toEqual({ type: 'custom', intervalDays: 14 });
+    expect(parse('Run every other day').recurrence).toEqual({ type: 'custom', intervalDays: 2 });
+    expect(parse('Review every 1 week').recurrence).toEqual({ type: 'weekly' });
+    expect(describeQuickAdd(parse('Pay card every 2 weeks'), now)[0]).toBe('Every 2 weeks');
+    expect(parse('Pay card every 2 weeks').title).toBe('Pay card');
+  });
+
   it('reads times in several shapes', () => {
     expect(parse('Call at 6:30pm').time).toBe('18:30');
     expect(parse('Call 12am').time).toBe('00:00');

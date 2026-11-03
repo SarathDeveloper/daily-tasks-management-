@@ -13,6 +13,7 @@ import { DateBar } from './components/DateBar';
 import { CalendarView } from './components/CalendarView';
 import { TaskCard } from './components/TaskCard';
 import { QuickAddBar } from './components/QuickAddBar';
+import { DailyPlanCard } from './components/DailyPlanCard';
 import { TaskModal } from './components/TaskModal';
 import { TimelineView } from './components/TimelineView';
 import { FocusRoom } from './components/FocusRoom';
@@ -74,7 +75,8 @@ import { Dropdown } from './components/ui/Dropdown';
 import { Toast } from './components/ui/Toast';
 import { Card } from './components/ui/Card';
 import { Button } from './components/ui/Button';
-import { NotificationService, calculateNextDueDate } from './services/notificationService';
+import { NotificationService } from './services/notificationService';
+import { isRecurring, nextOccurrenceOf, rescheduled, skipOccurrence } from './lib/taskRecurrence';
 import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style as StatusBarStyle } from '@capacitor/status-bar';
 import { SplashScreen } from '@capacitor/splash-screen';
@@ -150,7 +152,7 @@ function usePersistJson(key: string, value: unknown, enabled: boolean) {
 }
 
 export default function App() {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = todayString();
 
   // Theme State (Light / Dark Mode)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -491,6 +493,10 @@ export default function App() {
   const [backupFolderError, setBackupFolderError] = useState('');
   const [activeAlert, setActiveAlert] = useState<{ task: Task; triggeredAt: Date } | null>(null);
   const [focusTask, setFocusTask] = useState<Task | null>(null);
+  /** Timer length for the next focus session, e.g. what is left of a time block. */
+  const [focusMinutes, setFocusMinutes] = useState<number | undefined>(undefined);
+  /** Start time for a new task opened from a Timeline hour. */
+  const [newTaskTime, setNewTaskTime] = useState<string | undefined>(undefined);
 
   // Undo toast for recently deleted tasks
   const [recentlyDeleted, setRecentlyDeleted] = useState<{ task: Task; index: number } | null>(null);
@@ -523,7 +529,7 @@ export default function App() {
         ? JSON.parse(savedFinance)
         : [];
       // Materialize recurring transactions up to today.
-      const todayStrLoad = new Date().toISOString().split('T')[0];
+      const todayStrLoad = todayString();
       const materialized = materializeRecurringTransactions(loadedFinance, todayStrLoad);
       setTransactions(materialized);
 
@@ -825,18 +831,18 @@ export default function App() {
 
   // Home-screen widgets show task titles and spending, so they stay blank while
   // app lock is on. A short delay batches bursts of edits into one update.
-  // `widgetDay` re-pushes after midnight on the next render, e.g. app resume.
-  const widgetDay = todayString();
+  // `localToday` re-pushes after midnight on the next render, e.g. app resume.
+  const localToday = todayString();
   useEffect(() => {
     if (!isNativeAndroid()) return;
     const timer = window.setTimeout(() => {
       const push = isAppLockEnabled()
         ? clearHomeWidgets()
-        : updateHomeWidgets(buildWidgetSnapshot(widgetDay, tasks, transactions, budgets));
+        : updateHomeWidgets(buildWidgetSnapshot(localToday, tasks, transactions, budgets));
       void push.catch((e) => console.warn('Failed to update home widgets:', e));
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [tasks, transactions, budgets, appLocked, widgetDay]);
+  }, [tasks, transactions, budgets, appLocked, localToday]);
 
   const pushNativeSchedule = useCallback((granted: boolean) => {
     if (!isNativeAndroid()) return;
@@ -1363,39 +1369,26 @@ export default function App() {
       const target = newTasks[targetIndex];
       const willBeCompleted = !target.completed;
 
+      const now = new Date().toISOString();
+      // updatedAt lets Drive sync keep this check over an older copy.
       newTasks[targetIndex] = {
         ...target,
         completed: willBeCompleted,
-        completedAt: willBeCompleted ? new Date().toISOString() : undefined,
+        completedAt: willBeCompleted ? now : undefined,
+        updatedAt: now,
       };
 
-      if (willBeCompleted && target.recurrence?.type && target.recurrence.type !== 'none') {
-        const nextDate = calculateNextDueDate(
-          target.date,
-          target.recurrence.type,
-          target.recurrence.intervalDays
-        );
+      if (willBeCompleted && isRecurring(target)) {
+        const nextDate = nextOccurrenceOf(target);
+        const ended = Boolean(target.recurrence.endDate && nextDate > target.recurrence.endDate);
+        const exists = newTasks.some((t) => t.title === target.title && t.date === nextDate);
 
-        const exists = newTasks.some(
-          (t) => t.title === target.title && t.date === nextDate
-        );
-
-        if (!exists) {
-          const nextTask: Task = {
-            ...target,
+        if (!ended && !exists) {
+          newTasks.push({
+            ...rescheduled(target, nextDate, now),
             id: `task-${Date.now()}`,
-            completed: false,
-            completedAt: undefined,
-            date: nextDate,
-            reminder: {
-              ...target.reminder,
-              lastNotifiedAt: undefined,
-              snoozedUntil: undefined,
-            },
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          newTasks.push(nextTask);
+            createdAt: now,
+          });
         }
       }
 
@@ -1413,6 +1406,7 @@ export default function App() {
           subtasks: t.subtasks.map((s) =>
             s.id === subtaskId ? { ...s, completed: !s.completed } : s
           ),
+          updatedAt: new Date().toISOString(),
         };
       })
     );
@@ -1487,6 +1481,56 @@ export default function App() {
     );
   };
 
+  // Skip just this occurrence of a recurring task. At the end of the series
+  // there is no next date, so the last occurrence is checked off instead.
+  const handleSkipTask = (taskId: string) => {
+    const now = new Date().toISOString();
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t.id !== taskId) return t;
+        return skipOccurrence(t, now) ?? { ...t, completed: true, completedAt: now, updatedAt: now };
+      })
+    );
+    if (activeAlert?.task.id === taskId) setActiveAlert(null);
+  };
+
+  // Move tasks to another day and/or time, re-arming their reminders.
+  const handleRescheduleTasks = (taskIds: string[], change: { date?: string; time?: string }) => {
+    const ids = new Set(taskIds);
+    const now = new Date().toISOString();
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (!ids.has(t.id)) return t;
+        const moved = rescheduled(t, change.date ?? t.date, now);
+        return {
+          ...moved,
+          time: change.time ?? t.time,
+          // Moving a task keeps its progress; only the reminder is re-armed.
+          completed: t.completed,
+          completedAt: t.completedAt,
+          subtasks: t.subtasks,
+        };
+      })
+    );
+  };
+
+  // Add one checklist step from the task card.
+  const handleAddSubtask = (taskId: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              subtasks: [...t.subtasks, { id: `sub-${Date.now()}`, title: trimmed, completed: false }],
+              updatedAt: new Date().toISOString(),
+            }
+          : t
+      )
+    );
+  };
+
   // Snooze Task
   const handleSnoozeTask = (taskId: string, minutes: number) => {
     const snoozedUntil = new Date(Date.now() + minutes * 60000).toISOString();
@@ -1510,12 +1554,14 @@ export default function App() {
   // Quick Add at Time from Timeline
   const handleQuickAddTaskAtTime = (timeStr: string) => {
     setEditingTask(null);
+    setNewTaskTime(timeStr);
     setIsTaskModalOpen(true);
   };
 
   // Start Focus Session
-  const handleStartFocus = (task: Task) => {
+  const handleStartFocus = (task: Task, minutes?: number) => {
     setFocusTask(task);
+    setFocusMinutes(minutes);
     setActiveTab('focus');
   };
 
@@ -2656,7 +2702,7 @@ export default function App() {
     } else {
       const newEntry: SavingsEntry = {
         id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        date: partial.date || new Date().toISOString().split('T')[0],
+        date: partial.date || todayString(),
         amount: partial.amount || 0,
         note: partial.note,
         createdAt: now,
@@ -3019,6 +3065,16 @@ export default function App() {
               />
             )}
 
+            {selectedDate === localToday && (
+              <DailyPlanCard
+                tasks={tasks}
+                today={localToday}
+                onToggleComplete={handleToggleComplete}
+                onRescheduleTasks={handleRescheduleTasks}
+                onSaveDiaryEntry={handleSaveDiaryEntry}
+              />
+            )}
+
             <QuickAddBar categories={categories} defaultDate={selectedDate} onAdd={handleSaveTask} />
 
             {/* Daily Completion Progress Banner */}
@@ -3056,6 +3112,8 @@ export default function App() {
                       onSnoozeTask={handleSnoozeTask}
                       onStartFocus={handleStartFocus}
                       onSelectTagFilter={(tag) => setTagFilter(tag)}
+                      onSkipTask={handleSkipTask}
+                      onAddSubtask={handleAddSubtask}
                     />
                   </div>
                 ))}
@@ -3140,6 +3198,7 @@ export default function App() {
             }}
             onQuickAddTaskAtTime={handleQuickAddTaskAtTime}
             onStartFocus={handleStartFocus}
+            onRescheduleTask={(taskId, time) => handleRescheduleTasks([taskId], { time })}
           />
         )}
 
@@ -3148,6 +3207,7 @@ export default function App() {
           <FocusRoom
             tasks={tasks}
             initialActiveTask={focusTask}
+            initialMinutes={focusMinutes}
             onCompleteTask={handleToggleComplete}
           />
         )}
@@ -3326,9 +3386,11 @@ export default function App() {
         onClose={() => {
           setIsTaskModalOpen(false);
           setEditingTask(null);
+          setNewTaskTime(undefined);
         }}
         onSaveTask={handleSaveTask}
         initialTask={editingTask}
+        initialTime={newTaskTime}
         categories={categories}
         selectedDate={selectedDate}
         localMusicName={settings.localMusicName}

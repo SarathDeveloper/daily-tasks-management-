@@ -6,12 +6,15 @@ import { audioService } from '../services/audioService';
 interface FocusRoomProps {
   tasks: Task[];
   initialActiveTask?: Task | null;
+  /** Length of the first focus session, e.g. the minutes left in a time block. */
+  initialMinutes?: number;
   onCompleteTask: (taskId: string) => void;
 }
 
 export const FocusRoom: React.FC<FocusRoomProps> = ({
   tasks,
   initialActiveTask,
+  initialMinutes,
   onCompleteTask,
 }) => {
   const [selectedTaskId, setSelectedTaskId] = useState<string>(
@@ -29,7 +32,13 @@ export const FocusRoom: React.FC<FocusRoomProps> = ({
     if (initialActiveTask) {
       setSelectedTaskId(initialActiveTask.id);
     }
-  }, [initialActiveTask]);
+    if (initialMinutes && initialMinutes > 0) {
+      setIsRunning(false);
+      setMode('pomodoro');
+      setDurationSec(initialMinutes * 60);
+      setTimeRemaining(initialMinutes * 60);
+    }
+  }, [initialActiveTask, initialMinutes]);
 
   // Mode Duration Presets
   const setTimerMode = (newMode: 'pomodoro' | 'shortBreak' | 'longBreak') => {

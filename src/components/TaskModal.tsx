@@ -24,6 +24,8 @@ interface TaskModalProps {
   categories: Category[];
   selectedDate: string;
   localMusicName?: string;
+  /** Start time for a new task, e.g. the Timeline hour that was tapped. */
+  initialTime?: string;
 }
 
 export const TaskModal: React.FC<TaskModalProps> = ({
@@ -34,6 +36,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   categories,
   selectedDate,
   localMusicName,
+  initialTime,
 }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -74,7 +77,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setTitle('');
       setDescription('');
       setDate(selectedDate);
-      setTime('09:00');
+      setTime(initialTime || '09:00');
       setEstimatedMinutes(30);
       setPriority('medium');
       setCategory(categories[0]?.name || 'Work');
@@ -87,7 +90,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setSubtasks([]);
       setTags([]);
     }
-  }, [initialTask, selectedDate, categories, isOpen]);
+  }, [initialTask, selectedDate, categories, isOpen, initialTime]);
 
   if (!isOpen) return null;
 
@@ -143,6 +146,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       recurrence: {
         type: recurrenceType,
         intervalDays: recurrenceType === 'custom' ? customInterval : undefined,
+        // The modal has no picker for these, so keep what quick add set.
+        daysOfWeek:
+          recurrenceType === 'weekly' && initialTask?.recurrence?.type === 'weekly'
+            ? initialTask.recurrence.daysOfWeek
+            : undefined,
+        endDate: recurrenceType !== 'none' ? initialTask?.recurrence?.endDate : undefined,
       },
       reminder: {
         enabled: reminderEnabled,

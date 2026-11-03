@@ -111,6 +111,17 @@ export function parseQuickAdd(
     if (interval < 1) return false;
     recurrence = interval === 1 ? { type: 'daily' } : { type: 'custom', intervalDays: interval };
   });
+  take(word(`every\\s+(\\d{1,2})\\s+weeks?`), (m) => {
+    const weeks = Number(m[1]);
+    if (weeks < 1) return false;
+    recurrence = weeks === 1 ? { type: 'weekly' } : { type: 'custom', intervalDays: weeks * 7 };
+  });
+  take(word('(?:every\\s+other\\s+week|biweekly|fortnightly)'), () => {
+    recurrence = { type: 'custom', intervalDays: 14 };
+  });
+  take(word('every\\s+other\\s+day'), () => {
+    recurrence = { type: 'custom', intervalDays: 2 };
+  });
   take(word(`every\\s+${ORDINAL}(?:\\s+of\\s+(?:the|every)\\s+month)?`), (m) => {
     const day = Number(m[1]);
     if (day < 1 || day > 31) return false;
@@ -258,7 +269,8 @@ export function describeQuickAdd(result: QuickAddResult, now: Date = new Date())
   const today = todayString(now);
   const tomorrow = todayString(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
   if (result.recurrence.type === 'custom') {
-    chips.push(`Every ${result.recurrence.intervalDays} days`);
+    const days = result.recurrence.intervalDays ?? 1;
+    chips.push(days % 7 === 0 ? `Every ${days / 7} weeks` : `Every ${days} days`);
   } else if (result.recurrence.type === 'weekly' && result.recurrence.daysOfWeek?.length) {
     const name = WEEKDAYS[result.recurrence.daysOfWeek[0]];
     chips.push(`Every ${name[0].toUpperCase()}${name.slice(1)}`);

@@ -13,6 +13,9 @@ import {
   AlertCircle,
   Tag,
   Check,
+  SkipForward,
+  ListChecks,
+  Plus,
 } from 'lucide-react';
 import { Task, Category } from '../types';
 
@@ -26,6 +29,9 @@ interface TaskCardProps {
   onSnoozeTask: (taskId: string, minutes: number) => void;
   onStartFocus: (task: Task) => void;
   onSelectTagFilter?: (tag: string) => void;
+  /** Recurring tasks only: move to the next occurrence without completing. */
+  onSkipTask?: (taskId: string) => void;
+  onAddSubtask?: (taskId: string, title: string) => void;
 }
 
 export const TaskCard: React.FC<TaskCardProps> = ({
@@ -38,8 +44,19 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   onSnoozeTask,
   onStartFocus,
   onSelectTagFilter,
+  onSkipTask,
+  onAddSubtask,
 }) => {
   const [showSubtasks, setShowSubtasks] = useState<boolean>(false);
+  const [newStep, setNewStep] = useState('');
+  const isRecurringTask = Boolean(task.recurrence?.type && task.recurrence.type !== 'none');
+
+  const addStep = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!newStep.trim() || !onAddSubtask) return;
+    onAddSubtask(task.id, newStep);
+    setNewStep('');
+  };
   const [showActionsMenu, setShowActionsMenu] = useState<boolean>(false);
 
   // Find category styling
@@ -187,8 +204,9 @@ export const TaskCard: React.FC<TaskCardProps> = ({
         </div>
 
         {/* Subtasks Bar / Trigger */}
-        {task.subtasks.length > 0 && (
+        {(task.subtasks.length > 0 || showSubtasks) && (
           <div className="mt-2.5 ml-[38px]">
+            {task.subtasks.length > 0 && (
             <button
               onClick={() => setShowSubtasks(!showSubtasks)}
               className="flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-300 hover:text-indigo-700 dark:hover:text-indigo-200 font-semibold py-0.5"
@@ -207,6 +225,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                 />
               </div>
             </button>
+            )}
 
             {/* Subtasks List */}
             {showSubtasks && (
@@ -227,6 +246,26 @@ export const TaskCard: React.FC<TaskCardProps> = ({
                     </span>
                   </label>
                 ))}
+                {onAddSubtask && !task.completed && (
+                  <form onSubmit={addStep} className="flex items-center gap-1.5 pt-0.5">
+                    <input
+                      type="text"
+                      value={newStep}
+                      onChange={(event) => setNewStep(event.target.value)}
+                      placeholder="Add a step"
+                      aria-label={`Add a step to ${task.title}`}
+                      className="flex-1 min-w-0 bg-transparent text-xs text-slate-800 dark:text-slate-100 placeholder:text-slate-400 border-b border-slate-200 dark:border-slate-700 focus:border-indigo-500 focus:outline-none py-1"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!newStep.trim()}
+                      aria-label="Add step"
+                      className="p-1 rounded-md text-indigo-600 dark:text-indigo-400 disabled:opacity-40 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </form>
+                )}
               </div>
             )}
           </div>
@@ -262,6 +301,30 @@ export const TaskCard: React.FC<TaskCardProps> = ({
           >
             <Play className="w-3.5 h-3.5 fill-current" />
             <span className="hidden sm:inline">Focus</span>
+          </button>
+        )}
+
+        {/* Add checklist steps when the task has none yet */}
+        {onAddSubtask && !task.completed && task.subtasks.length === 0 && !showSubtasks && (
+          <button
+            onClick={() => setShowSubtasks(true)}
+            className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors active:scale-95"
+            title="Add checklist steps"
+          >
+            <ListChecks className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Steps</span>
+          </button>
+        )}
+
+        {/* Skip just this occurrence of a recurring task */}
+        {onSkipTask && isRecurringTask && !task.completed && (
+          <button
+            onClick={() => onSkipTask(task.id)}
+            className="h-8 px-2.5 flex items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/50 transition-colors active:scale-95"
+            title="Skip this time and move to the next occurrence"
+          >
+            <SkipForward className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Skip</span>
           </button>
         )}
 
