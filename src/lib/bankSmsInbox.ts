@@ -15,7 +15,6 @@ import {
  */
 export const BANK_SMS_PENDING_KEY = 'dayflow_bank_sms_pending_v1';
 export const BANK_SMS_HANDLED_KEY = 'dayflow_bank_sms_handled_v1';
-export const BANK_SMS_SCANNED_KEY = 'dayflow_bank_sms_scanned_v1';
 
 const MAX_PENDING = 100;
 const MAX_HANDLED = 2000;
@@ -39,14 +38,6 @@ export function readPendingBankSms(): PendingBankSms[] {
 
 export function readHandledBankSms(): string[] {
   return readJson<string[]>(BANK_SMS_HANDLED_KEY, []);
-}
-
-export function hasScannedBankSms(): boolean {
-  return readJson<boolean>(BANK_SMS_SCANNED_KEY, false) === true;
-}
-
-export function markBankSmsScanned(): void {
-  writeJson(BANK_SMS_SCANNED_KEY, true);
 }
 
 export function loadBankSmsState(): BankSmsState {

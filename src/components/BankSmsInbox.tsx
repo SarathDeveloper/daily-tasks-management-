@@ -5,11 +5,9 @@ import type { Account, FinanceCategory, FinanceTransaction } from '../types';
 import { financeCategoryNames } from '../data/financeCategories';
 import {
   dropPendingBankSms,
-  hasScannedBankSms,
   ingestBankMessages,
   isPossibleDuplicate,
   loadBankSmsState,
-  markBankSmsScanned,
   matchLastFour,
   paymentLabel,
   readPendingBankSms,
@@ -45,12 +43,12 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
   financeCategories,
   onConfirm,
 }) => {
-  const [granted, setGranted] = useState<boolean | null>(null);
+  const [enabled, setEnabled] = useState<boolean | null>(null);
   const [pending, setPending] = useState<PendingBankSms[]>(() =>
     isNativeAndroid() ? readPendingBankSms() : []
   );
   const [busy, setBusy] = useState(false);
-  const [denied, setDenied] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [edits, setEdits] = useState<Record<string, { category?: string; accountId?: string }>>({});
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
@@ -63,28 +61,12 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
     const pull = () => {
       chain = chain
         .then(async () => {
-          const status = await BankSms.checkPermission();
-          if (alive) setGranted(status.granted);
-          if (!status.granted) {
-            if (alive) setPending(readPendingBankSms());
-            return;
-          }
+          const status = await BankSms.isEnabled();
+          if (alive) setEnabled(status.enabled);
           const peeked = await BankSms.peekQueue();
           const queued = peeked.messages ?? [];
-          const incoming = [...queued];
-          let scanFinished = hasScannedBankSms();
-          if (!scanFinished) {
-            try {
-              const scanned = await BankSms.scanRecent({ days: 30 });
-              incoming.push(...(scanned.messages ?? []));
-              scanFinished = true;
-            } catch (error) {
-              console.warn('Could not scan recent bank SMS:', error);
-            }
-          }
-          const next = ingestBankMessages(incoming, accountsRef.current, loadBankSmsState());
+          const next = ingestBankMessages(queued, accountsRef.current, loadBankSmsState());
           saveBankSmsState(next);
-          if (scanFinished && !hasScannedBankSms()) markBankSmsScanned();
           if (alive) setPending(next.pending);
           const ackIds = queued
             .filter((message) => {
@@ -96,7 +78,7 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
         })
         .catch((error) => {
           console.warn('Could not read bank SMS:', error);
-          if (alive) setGranted((value) => (value == null ? false : value));
+          if (alive) setEnabled((value) => (value == null ? false : value));
         });
     };
     pullRef.current = pull;
@@ -123,7 +105,7 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
     };
   }, []);
 
-  if (!isNativeAndroid() || granted === null) return null;
+  if (!isNativeAndroid() || enabled === null) return null;
 
   const activeAccounts = accounts.filter((account) => !account.isArchived);
 
@@ -166,18 +148,24 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
     remove(item.id);
   };
 
-  const allow = async () => {
+  const openAccess = async () => {
     setBusy(true);
     try {
-      const result = await BankSms.requestPermission();
-      setDenied(!result.granted);
-      setGranted(result.granted);
-      pullRef.current();
+      await BankSms.openSettings();
+      setShowHelp(true);
     } catch (error) {
-      console.warn('Could not request SMS permission:', error);
-      setDenied(true);
+      console.warn('Could not open notification access settings:', error);
+      setShowHelp(true);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const openAppInfo = async () => {
+    try {
+      await BankSms.openAppDetails();
+    } catch (error) {
+      console.warn('Could not open app settings:', error);
     }
   };
 
@@ -187,32 +175,42 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
         <MessageSquare className="w-4 h-4 mt-0.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
         <div className="min-w-0">
           <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-            Bank SMS{pending.length > 0 ? ` (${pending.length})` : ''}
+            Bank spends{pending.length > 0 ? ` (${pending.length})` : ''}
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {granted
-              ? 'Debits and credits wait here. They join the ledger only after you confirm.'
-              : 'When a bank texts a debit or credit, it waits here until you confirm it.'}
+            {enabled
+              ? 'Debits and credits from bank texts wait here. They join the ledger only after you confirm.'
+              : 'Dayflow reads the bank text from the messages notification. Nothing is saved until you confirm.'}
           </p>
         </div>
       </div>
 
-      {!granted && (
+      {!enabled && (
         <div className="space-y-2">
-          <Button type="button" size="sm" onClick={() => void allow()} disabled={busy}>
-            {busy ? 'Waiting for permission…' : 'Allow SMS'}
+          <Button type="button" size="sm" onClick={() => void openAccess()} disabled={busy}>
+            {busy ? 'Opening settings…' : 'Turn on notification access'}
           </Button>
-          {denied && (
-            <p className="text-xs text-amber-700 dark:text-amber-300">
-              SMS access is still off. Allow SMS for Dayflow in the phone’s app settings, then come back.
-            </p>
+          {showHelp && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                Turn on Dayflow in the notification access list, then come back.
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                On Android 13 and newer the switch may be greyed out. Fix it in App info → three
+                dots → Allow restricted settings.
+              </p>
+              <Button type="button" size="sm" variant="secondary" onClick={() => void openAppInfo()}>
+                Open App info
+              </Button>
+            </div>
           )}
         </div>
       )}
 
-      {granted && pending.length === 0 && (
+      {enabled && pending.length === 0 && (
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Listening for bank SMS. If a new message never shows up, set Dayflow to Unrestricted battery.
+          Waiting for a bank text. If one never shows up, make sure the messages app still posts a
+          notification for that bank, and set Dayflow to Unrestricted battery.
         </p>
       )}
 
@@ -238,7 +236,7 @@ export const BankSmsInbox: React.FC<BankSmsInboxProps> = ({
                 </p>
                 {item.lastFour && (
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    SMS account ends in {item.lastFour}
+                    Account ends in {item.lastFour}
                   </p>
                 )}
                 {duplicate && (

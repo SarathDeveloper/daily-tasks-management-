@@ -51,17 +51,19 @@
         </receiver>
 
         <!--
-          Personal APK only. SMS_RECEIVED is a protected system broadcast.
-          The BROADCAST_SMS permission stops other apps from injecting messages.
+          Notification access, not SMS. Android grants READ_SMS only to the
+          default SMS app and Play Protect blocks sideloads that request it,
+          so bank texts are read from the messaging app's notification.
         -->
-        <receiver
-            android:name=".BankSmsReceiver"
+        <service
+            android:name=".BankSmsNotificationService"
             android:exported="true"
-            android:permission="android.permission.BROADCAST_SMS">
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
-                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+                <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
-        </receiver>
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -92,7 +94,4 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- Personal sideload only. Not for a Play Store build. -->
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <uses-permission android:name="android.permission.READ_SMS" />
 </manifest>

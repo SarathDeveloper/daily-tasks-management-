@@ -46,6 +46,27 @@ final class BankSmsStore {
                 || lower.contains("₹");
     }
 
+    /**
+     * Bank-message shape: an account, card, or UPI reference. Used to keep
+     * chat apps that post CATEGORY_MESSAGE notifications ("I paid Rs 500")
+     * out of the pending list.
+     */
+    static boolean hasAccountSignal(String body) {
+        if (body == null) return false;
+        String lower = body.toLowerCase(Locale.ROOT);
+        if (lower.contains("a/c")
+                || lower.contains("account")
+                || lower.contains("card")
+                || lower.contains("upi")
+                || lower.contains("vpa")
+                || lower.contains("bank")
+                || lower.contains("avl bal")
+                || lower.contains("avl lmt")) {
+            return true;
+        }
+        return lower.matches(".*(?:\\*{2,}|x{2,})\\d{2,}.*");
+    }
+
     static String fingerprint(String address, String body) {
         String normalized = ((address == null ? "" : address) + "\n" + (body == null ? "" : body))
                 .trim()
