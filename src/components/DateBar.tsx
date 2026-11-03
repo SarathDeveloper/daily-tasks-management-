@@ -1,6 +1,7 @@
 import React from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Task } from '../types';
+import { todayString } from '../lib/ledger';
 
 interface DateBarProps {
   selectedDate: string; // YYYY-MM-DD
@@ -9,7 +10,7 @@ interface DateBarProps {
 }
 
 export const DateBar: React.FC<DateBarProps> = ({ selectedDate, onSelectDate, tasks }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = todayString();
 
   // Generate 7 days centered around selectedDate or today
   const baseDate = new Date(selectedDate + 'T00:00:00');
@@ -18,7 +19,7 @@ export const DateBar: React.FC<DateBarProps> = ({ selectedDate, onSelectDate, ta
   for (let i = -3; i <= 3; i++) {
     const d = new Date(baseDate);
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = todayString(d);
     const isToday = dateStr === todayStr;
 
     // Count tasks for this date
@@ -39,7 +40,7 @@ export const DateBar: React.FC<DateBarProps> = ({ selectedDate, onSelectDate, ta
   const navigateDays = (offset: number) => {
     const d = new Date(selectedDate + 'T00:00:00');
     d.setDate(d.getDate() + offset);
-    onSelectDate(d.toISOString().split('T')[0]);
+    onSelectDate(todayString(d));
   };
 
   const isSelectedToday = selectedDate === todayStr;

@@ -21,6 +21,7 @@ import type {
   Task,
 } from '../types';
 import { DEFAULT_SETTINGS } from './persistence';
+import { todayString } from './ledger';
 
 export const BACKUP_APP = 'dayflow';
 export const BACKUP_VERSION = 1;
@@ -98,7 +99,7 @@ export class BackupError extends Error {
 const INVALID_FILE = 'This file is not a Dayflow backup.';
 
 export function backupFilename(date = new Date()): string {
-  return `dayflow-backup-${date.toISOString().split('T')[0]}.json`;
+  return `dayflow-backup-${todayString(date)}.json`;
 }
 
 /** Single file replaced in the folder chosen for automatic backup. */

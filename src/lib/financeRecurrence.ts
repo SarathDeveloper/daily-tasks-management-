@@ -1,6 +1,8 @@
 import type { FinanceTransaction, FinanceRecurrenceType } from '../types';
+import { todayString } from './ledger';
 
-const toISODate = (d: Date) => d.toISOString().split('T')[0];
+/** Local calendar date. toISOString() is UTC and lands a day early east of UTC. */
+const toISODate = (d: Date) => todayString(d);
 
 const parseDate = (dateStr: string) => new Date(dateStr + 'T00:00:00');
 

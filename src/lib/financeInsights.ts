@@ -1,6 +1,7 @@
 import type { FinanceTransaction } from '../types';
+import { todayString } from './ledger';
 
-const toISODate = (d: Date) => d.toISOString().split('T')[0];
+const toISODate = (d: Date) => todayString(d);
 
 export interface DayData {
   dateStr: string;

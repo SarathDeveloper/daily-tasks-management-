@@ -133,7 +133,7 @@ const toMonthKey = (dateStr: string) => dateStr.slice(0, 7);
 const shiftDate = (dateStr: string, days: number) => {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
+  return todayString(d);
 };
 
 const shiftMonth = (monthKey: string, offset: number) => {
@@ -226,7 +226,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
   const [paymentAmountInput, setPaymentAmountInput] = useState('');
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = todayString();
 
   const dailyTx = useMemo(
     () =>

@@ -1,7 +1,8 @@
 import { Task } from '../types';
+import { todayString } from '../lib/ledger';
 
 export function getInitialTasks(): Task[] {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = todayString();
   const now = new Date();
   
   // Create morning task time 08:30

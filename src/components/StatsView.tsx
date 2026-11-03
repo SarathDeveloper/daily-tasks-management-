@@ -2,6 +2,7 @@ import React from 'react';
 import { Flame, CheckCircle, Clock, Zap, TrendingUp, Calendar, Repeat } from 'lucide-react';
 import { Goal, Habit, HabitCheckIn, Task } from '../types';
 import { habitCompletion, habitStreak, todayDateString, weekStartMonday } from '../lib/habits';
+import { todayString } from '../lib/ledger';
 
 interface StatsViewProps {
   tasks: Task[];
@@ -28,20 +29,20 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, g
     if (dates.length === 0) return 0;
 
     let streak = 0;
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = todayString();
     let checkDate = new Date();
 
     // Check if today or yesterday has a completed task
     if (!dates.includes(todayStr)) {
       checkDate.setDate(checkDate.getDate() - 1);
-      const yesterdayStr = checkDate.toISOString().split('T')[0];
+      const yesterdayStr = todayString(checkDate);
       if (!dates.includes(yesterdayStr)) {
         return 0;
       }
     }
 
     while (true) {
-      const dStr = checkDate.toISOString().split('T')[0];
+      const dStr = todayString(checkDate);
       if (dates.includes(dStr)) {
         streak++;
         checkDate.setDate(checkDate.getDate() - 1);
@@ -82,7 +83,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ tasks, habits, checkIns, g
   const last7Days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() - (6 - i));
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = todayString(d);
     const dayTasks = tasks.filter((t) => t.date === dateStr);
     const dayDone = dayTasks.filter((t) => t.completed).length;
 

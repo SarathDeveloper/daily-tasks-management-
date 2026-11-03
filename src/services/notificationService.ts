@@ -1,6 +1,7 @@
 import { NotificationSettings, SoundType, Task } from '../types';
 import { audioService } from './audioService';
 import { isQuietHours } from '../lib/reminders';
+import { todayString } from '../lib/ledger';
 
 /**
  * Browser/PWA notification fallback.
@@ -141,7 +142,7 @@ export function calculateNextDueDate(
   if (isNaN(date.getTime())) {
     const fallback = new Date();
     fallback.setDate(fallback.getDate() + 1);
-    return fallback.toISOString().split('T')[0];
+    return todayString(fallback);
   }
 
   switch (recurrenceType) {
@@ -180,5 +181,7 @@ export function calculateNextDueDate(
       break;
   }
 
-  return date.toISOString().split('T')[0];
+  // Local date, not toISOString(): east of UTC, local midnight is still the
+  // previous day in UTC, so the "next" date came back unchanged.
+  return todayString(date);
 }
