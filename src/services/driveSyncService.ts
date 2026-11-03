@@ -58,6 +58,17 @@ export class DriveTimeoutError extends DriveError {
   }
 }
 
+/**
+ * The backup changed on Drive after this device read it, so writing now would
+ * erase another device's upload. Pull, merge, and try again.
+ */
+export class DriveConflictError extends DriveError {
+  constructor(message = 'The Drive backup changed while syncing. Sync again to merge it.') {
+    super(412, message);
+    this.name = 'DriveConflictError';
+  }
+}
+
 /** A request must never hang forever: the UI would stay on “Syncing”. */
 const REQUEST_TIMEOUT_MS = 20_000;
 /** Drive occasionally returns these for a request that succeeds on retry. */
@@ -88,6 +99,8 @@ export interface DriveFileRef {
   id: string;
   name: string;
   modifiedTime?: string;
+  /** Drive bumps this on every change; used to detect a concurrent upload. */
+  version?: string;
 }
 
 export interface CloudSnapshot {
@@ -192,7 +205,7 @@ async function listFiles(
 ): Promise<DriveFileRef[]> {
   const params = new URLSearchParams({
     spaces: space,
-    fields: 'files(id,name,modifiedTime)',
+    fields: 'files(id,name,modifiedTime,version)',
     pageSize: '20',
     q: query,
   });
@@ -368,6 +381,16 @@ function mediaPart(envelope: SyncEnvelope, boundary: string, metadata: string): 
   ].join('\r\n');
 }
 
+async function currentVersion(token: string, fileId: string): Promise<string | undefined> {
+  const response = await driveGet(
+    token,
+    `${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=version`
+  );
+  await assertOk(response, 'lookup');
+  const body = (await response.json()) as { version?: string };
+  return body.version;
+}
+
 async function writeMedia(token: string, fileId: string, envelope: SyncEnvelope): Promise<void> {
   // Multipart, not a raw JSON body. A plain application/json PATCH is easy for
   // Drive to treat as file metadata, which leaves the backup bytes unchanged.
@@ -391,6 +414,12 @@ async function writeMedia(token: string, fileId: string, envelope: SyncEnvelope)
 /**
  * Writes the snapshot into Dayflow/daily-tasks-sync.json, then reads it back.
  * Throws when Drive does not return the same records.
+ *
+ * `existing` is the file as it was when `envelope` was merged. If Drive holds a
+ * newer version, or a file appeared that was never read, this throws
+ * `DriveConflictError` instead of overwriting that upload. Drive v3 has no
+ * conditional write for file content, so the check runs right before the
+ * write; that narrows the race to one request rather than closing it.
  */
 export async function saveCloudSnapshot(
   token: string,
@@ -398,11 +427,20 @@ export async function saveCloudSnapshot(
   existing: DriveFileRef | null,
   envelope: SyncEnvelope
 ): Promise<void> {
-  // Two devices syncing at once must not create a second copy of the file, so
-  // the folder is re-checked right before creating.
-  const target = existing ?? (await findInParent(token, folderId, SYNC_FILE_NAME));
-  const fileId = target ? target.id : await createSyncFile(token, folderId, envelope);
-  if (target) await writeMedia(token, fileId, envelope);
+  let fileId: string;
+  if (existing) {
+    if (existing.version !== undefined) {
+      const version = await currentVersion(token, existing.id);
+      if (version !== undefined && version !== existing.version) throw new DriveConflictError();
+    }
+    fileId = existing.id;
+    await writeMedia(token, fileId, envelope);
+  } else {
+    // Two devices syncing at once must not create a second copy of the file,
+    // nor overwrite one the other just created without merging it first.
+    if (await findInParent(token, folderId, SYNC_FILE_NAME)) throw new DriveConflictError();
+    fileId = await createSyncFile(token, folderId, envelope);
+  }
 
   // Drive is not always read-after-write consistent, so the verification read
   // is retried briefly before declaring the upload lost. A just-created file

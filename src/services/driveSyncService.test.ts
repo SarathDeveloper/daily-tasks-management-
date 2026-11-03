@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SyncEnvelope } from '../lib/persistence';
 import {
+  DriveConflictError,
   DriveError,
   DriveScopeError,
   DriveTimeoutError,
@@ -180,7 +181,7 @@ describe('Drive backup file', () => {
     expect(cloud.hidden[0].data.tasks[0]).toMatchObject({ title: 'Dayflow task' });
   });
 
-  it('updates the existing file instead of creating a duplicate', async () => {
+  it('neither duplicates nor overwrites a file another device just created', async () => {
     const methods: string[] = [];
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET';
@@ -188,12 +189,47 @@ describe('Drive backup file', () => {
       if (method === 'GET' && new URL(url).searchParams.get('q')?.includes('in parents')) {
         return json({ files: [{ id: 'file-1', name: SYNC_FILE_NAME }] });
       }
-      if (method === 'GET' && url.includes('alt=media')) return json(snapshot);
       return json({ id: 'file-1' });
     });
 
-    // `existing` is null, but the folder already holds the file: no second copy.
-    await saveCloudSnapshot('token-1', 'folder-1', null, snapshot);
+    // `existing` is null, but the folder now holds a file this device never merged.
+    await expect(saveCloudSnapshot('token-1', 'folder-1', null, snapshot)).rejects.toBeInstanceOf(
+      DriveConflictError
+    );
+    expect(methods).toEqual([]);
+  });
+
+  it('refuses to overwrite a backup that changed after it was read', async () => {
+    const methods: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      methods.push(method);
+      if (url.includes('fields=version')) return json({ version: '8' });
+      return json({ error: { message: 'unexpected' } }, 500);
+    });
+
+    await expect(
+      saveCloudSnapshot('token-1', 'folder-1', { id: 'file-1', name: SYNC_FILE_NAME, version: '7' }, snapshot)
+    ).rejects.toBeInstanceOf(DriveConflictError);
+    expect(methods).not.toContain('PATCH');
+  });
+
+  it('writes when the backup is still the version that was read', async () => {
+    const methods: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (url.includes('uploadType=multipart')) methods.push(method);
+      if (url.includes('fields=version')) return json({ version: '7' });
+      if (url.includes('alt=media')) return json(snapshot);
+      return json({ id: 'file-1' });
+    });
+
+    await saveCloudSnapshot(
+      'token-1',
+      'folder-1',
+      { id: 'file-1', name: SYNC_FILE_NAME, version: '7' },
+      snapshot
+    );
     expect(methods).toEqual(['PATCH']);
   });
 

@@ -24,6 +24,7 @@ import {
 import { mergeEnvelopes } from '../lib/syncMerge';
 import {
   DriveAuthError,
+  DriveConflictError,
   DriveScopeError,
   loadCloudSnapshot,
   saveCloudSnapshot,
@@ -93,6 +94,8 @@ const AUTO_SYNC_DEBOUNCE_MS = 4000;
 const WEB_PULL_INTERVAL_MS = 60_000;
 /** After the Google sheet closes, wait briefly for the plugin result before giving up. */
 const CONNECT_RESUME_GRACE_MS = 2000;
+/** Pull-merge-push rounds before a sync that keeps racing another device gives up. */
+const MAX_CONFLICT_ATTEMPTS = 3;
 
 export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
   const { revision, onDataApplied, enabled = true } = options;
@@ -212,60 +215,70 @@ export function useCloudSync(options: UseCloudSyncOptions): CloudSyncApi {
           }
         };
 
-        const cloud = await withAuthRetry(() =>
-          loadCloudSnapshot(activeToken, legacyProfileId, { canReadAppData })
-        );
+        // Another device may upload between our read and our write. Drive then
+        // refuses the write, so pull its copy, merge again, and retry.
+        const pullMergePush = async (): Promise<void> => {
+          const cloud = await withAuthRetry(() =>
+            loadCloudSnapshot(activeToken, legacyProfileId, { canReadAppData })
+          );
 
-        if (mode === 'restore') {
-          const pieces = [cloud.visible, ...cloud.hidden].filter((piece): piece is SyncEnvelope => piece !== null);
-          if (pieces.length === 0) throw new Error('No cloud backup found in Google Drive yet.');
-          let restored = pieces[0];
-          for (const extra of pieces.slice(1)) {
-            const paired = preferRealTaskLists(restored, extra);
-            restored = mergeEnvelopes(paired.left, paired.right);
+          if (mode === 'restore') {
+            const pieces = [cloud.visible, ...cloud.hidden].filter((piece): piece is SyncEnvelope => piece !== null);
+            if (pieces.length === 0) throw new Error('No cloud backup found in Google Drive yet.');
+            let restored = pieces[0];
+            for (const extra of pieces.slice(1)) {
+              const paired = preferRealTaskLists(restored, extra);
+              restored = mergeEnvelopes(paired.left, paired.right);
+            }
+            applyEnvelope(restored, storageKeys);
+            if (!cloud.file || !cloud.visible || !snapshotsMatch(cloud.visible, restored)) {
+              await withAuthRetry(() =>
+                saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, restored)
+              );
+            }
+            return;
           }
-          applyEnvelope(restored, storageKeys);
-          if (!cloud.file || !cloud.visible || !snapshotsMatch(cloud.visible, restored)) {
+
+          const stored = buildLocalEnvelope(storageKeys);
+          let local = stored;
+          for (const hidden of cloud.hidden) {
+            const paired = preferRealTaskLists(local, hidden);
+            local = mergeEnvelopes(paired.left, paired.right);
+          }
+          const pairedWithRemote = preferRealTaskLists(local, cloud.visible);
+          local = pairedWithRemote.left;
+          const merged = mergeEnvelopes(local, pairedWithRemote.right);
+
+          const visibleAlreadyMatches =
+            cloud.file !== null &&
+            cloud.visible !== null &&
+            snapshotsMatch(cloud.visible, merged) &&
+            snapshotsMatch(local, merged);
+
+          if (!visibleAlreadyMatches) {
             await withAuthRetry(() =>
-              saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, restored)
+              saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, merged)
             );
           }
-          clearLegacyDriveProfileId();
-          setStatus('idle');
-          setError(null);
-          return;
-        }
 
-        const stored = buildLocalEnvelope(storageKeys);
-        let local = stored;
-        for (const hidden of cloud.hidden) {
-          const paired = preferRealTaskLists(local, hidden);
-          local = mergeEnvelopes(paired.left, paired.right);
-        }
-        const pairedWithRemote = preferRealTaskLists(local, cloud.visible);
-        local = pairedWithRemote.left;
-        const merged = mergeEnvelopes(local, pairedWithRemote.right);
+          // Write back when Drive or a one-time hidden file changed this device.
+          if (!snapshotsMatch(stored, merged)) {
+            applyEnvelope(merged, storageKeys);
+          } else {
+            const meta = readSyncMeta(storageKeys);
+            const syncedAt = new Date().toISOString();
+            writeSyncMeta(storageKeys, { ...meta, lastSyncedAt: syncedAt });
+            setLastSyncedAt(syncedAt);
+          }
+        };
 
-        const visibleAlreadyMatches =
-          cloud.file !== null &&
-          cloud.visible !== null &&
-          snapshotsMatch(cloud.visible, merged) &&
-          snapshotsMatch(local, merged);
-
-        if (!visibleAlreadyMatches) {
-          await withAuthRetry(() =>
-            saveCloudSnapshot(activeToken, cloud.folderId, cloud.file, merged)
-          );
-        }
-
-        // Write back when Drive or a one-time hidden file changed this device.
-        if (!snapshotsMatch(stored, merged)) {
-          applyEnvelope(merged, storageKeys);
-        } else {
-          const meta = readSyncMeta(storageKeys);
-          const syncedAt = new Date().toISOString();
-          writeSyncMeta(storageKeys, { ...meta, lastSyncedAt: syncedAt });
-          setLastSyncedAt(syncedAt);
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            await pullMergePush();
+            break;
+          } catch (e) {
+            if (!(e instanceof DriveConflictError) || attempt >= MAX_CONFLICT_ATTEMPTS) throw e;
+          }
         }
 
         clearLegacyDriveProfileId();

@@ -3,8 +3,8 @@
  * stored in Google Drive.
  *
  * Strategy: last-write-wins per record using the record's `updatedAt` (falling
- * back to `createdAt`). Deletions win over records via tombstones, which are
- * pruned after 90 days. This is intentionally simple and predictable for the
+ * back to `createdAt`). A tombstone removes every copy of a record last saved
+ * before the deletion; tombstones are pruned after 90 days. This is intentionally simple and predictable for the
  * single-user, one-or-two-device case.
  */
 import type { LedgerSettings, NotificationSettings } from '../types';
@@ -30,7 +30,8 @@ interface MergeableRecord {
 /**
  * Merge two id-keyed collections.
  * - The newer record wins when both sides have the same id.
- * - Any id present in `tombstones` is removed regardless of side.
+ * - An id in `tombstones` is removed unless the surviving copy was saved
+ *   after the deletion (a recreated record).
  * - Local ordering is preserved; remote-only records are appended in their
  *   original order so the UI does not jump around.
  */
@@ -63,8 +64,9 @@ export function mergeCollection<T extends MergeableRecord>(
   return merged.filter((record) => {
     const tombstone = tombstones[record.id];
     if (!tombstone) return true;
-    // A record edited after it was deleted on another device stays deleted:
-    // deletion is the explicit user action and is cheap to redo.
+    // Only a record saved after the deletion survives it. Ids such as
+    // `budget-<month>` or `ledger` are reused, so recreating one after a delete
+    // must win; anything last saved before the deletion stays deleted.
     const deletedAt = Date.parse(tombstone);
     if (!Number.isFinite(deletedAt)) return false;
     return timestampOf(record) > deletedAt;
