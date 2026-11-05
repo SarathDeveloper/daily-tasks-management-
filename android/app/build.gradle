@@ -1,13 +1,21 @@
 apply plugin: 'com.android.application'
 
-// Release signing material lives in android/keystore.properties (git-ignored).
-// If it is missing the release build falls back to debug signing so CI or a
-// fresh clone still produces an installable APK.
+// Release signing material comes from android/keystore.properties (git-ignored)
+// or, for CI, from the DAYFLOW_KEYSTORE_FILE / DAYFLOW_KEYSTORE_PASSWORD /
+// DAYFLOW_KEY_ALIAS / DAYFLOW_KEY_PASSWORD environment variables. Release builds
+// (APK or Play bundle) fail if neither is set, rather than producing an
+// unsigned artifact. Debug builds never need it.
 def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
+def signingValue = { String prop, String env -> keystoreProperties[prop] ?: System.getenv(env) }
+def releaseStoreFile = signingValue('storeFile', 'DAYFLOW_KEYSTORE_FILE')
+def releaseStorePassword = signingValue('storePassword', 'DAYFLOW_KEYSTORE_PASSWORD')
+def releaseKeyAlias = signingValue('keyAlias', 'DAYFLOW_KEY_ALIAS')
+def releaseKeyPassword = signingValue('keyPassword', 'DAYFLOW_KEY_PASSWORD')
+def hasReleaseSigning = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { it }
 
 android {
     namespace = "com.dayflow.dailytasks"
@@ -16,8 +24,9 @@ android {
         applicationId "com.dayflow.dailytasks"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        // Bump versionCode on every Play upload; keep versionName in step with package.json.
+        versionCode 2
+        versionName "1.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -27,22 +36,33 @@ android {
     }
     signingConfigs {
         release {
-            if (keystorePropertiesFile.exists()) {
-                storeFile file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
-                keyAlias keystoreProperties['keyAlias']
-                keyPassword keystoreProperties['keyPassword']
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
             }
         }
     }
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (keystorePropertiesFile.exists()) {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
         }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def wantsRelease = graph.allTasks.any { it.project == project && it.name ==~ /(assemble|bundle|package|sign)Release.*/ }
+    if (wantsRelease && !hasReleaseSigning) {
+        throw new GradleException(
+            "Release signing is not configured. Create android/keystore.properties " +
+            "(storeFile, storePassword, keyAlias, keyPassword) or set DAYFLOW_KEYSTORE_FILE, " +
+            "DAYFLOW_KEYSTORE_PASSWORD, DAYFLOW_KEY_ALIAS and DAYFLOW_KEY_PASSWORD.")
     }
 }
 

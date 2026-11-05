@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Resource shrinking (release builds) cannot see sounds that are looked up by
+  name at runtime, e.g. notification channel sounds from
+  @capacitor/local-notifications and the "silent" tone. Keep every reminder
+  and alarm sound.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/*" />

@@ -2946,10 +2946,10 @@ export default function App() {
                   title="Filter by Priority"
                   options={[
                     { value: 'all', label: 'All Priorities' },
-                    { value: 'urgent', label: '?? Urgent' },
-                    { value: 'high', label: '?? High' },
-                    { value: 'medium', label: '?? Medium' },
-                    { value: 'low', label: '?? Low' },
+                    { value: 'urgent', label: '🔴 Urgent' },
+                    { value: 'high', label: '🟠 High' },
+                    { value: 'medium', label: '🔵 Medium' },
+                    { value: 'low', label: '🟢 Low' },
                   ]}
                 />
 
@@ -2997,8 +2997,8 @@ export default function App() {
                   accent="indigo"
                   options={[
                     { value: 'time', label: 'Sort by Time' },
-                    { value: 'priority-desc', label: 'Priority (Urgent ? Low)' },
-                    { value: 'priority-asc', label: 'Priority (Low ? Urgent)' },
+                    { value: 'priority-desc', label: 'Priority (Urgent → Low)' },
+                    { value: 'priority-asc', label: 'Priority (Low → Urgent)' },
                     { value: 'title', label: 'Title (A-Z)' },
                   ]}
                 />

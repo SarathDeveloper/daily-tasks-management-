@@ -19,3 +19,8 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Keep file and line numbers in release stack traces (upload
+# build/outputs/mapping/release/mapping.txt to Play to de-obfuscate them).
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
