@@ -52,24 +52,6 @@
             </intent-filter>
         </receiver>
 
-        <!--
-          Notification access, not SMS: Android grants READ_SMS only to the
-          default SMS app. Only SMS apps' notifications are read, and OTPs are
-          dropped. Play Protect (enhanced fraud protection, India) still blocks
-          installing an APK with this listener from a browser, chat app or file
-          manager, so install over USB with npm run apk:install. Personal use
-          only; not meant for Play Store distribution.
-        -->
-        <service
-            android:name=".BankSmsNotificationService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
-
         <receiver
             android:name=".DayflowTasksWidget"
             android:exported="false"

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Android 12 and newer: same exclusions as backup_rules.xml, for both cloud
-  backup and phone-to-phone transfer.
+  Android 12 and newer: same exclusions as backup_rules.xml (see the note there
+  on the legacy dayflow_bank_sms.xml), for both cloud backup and phone-to-phone
+  transfer.
 -->
 <data-extraction-rules>
     <cloud-backup>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   Wallet,
   Plus,
@@ -67,9 +67,15 @@ import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Dropdown } from './ui/Dropdown';
 import { FinanceAlertBanner } from './FinanceAlertBanner';
-import { BankSmsInbox } from './BankSmsInbox';
 import { MonthlyReportCard } from './MonthlyReportCard';
 import { LedgerView, type LedgerViewProps } from './ledger/LedgerView';
+import { BANK_SMS_ENABLED } from '../lib/features';
+
+// Loaded lazily and only when the flag is on, so a build with the flag off
+// drops the module (and its top-level native plugin registration) entirely.
+const BankSmsInbox = BANK_SMS_ENABLED
+  ? lazy(() => import('./BankSmsInbox').then((m) => ({ default: m.BankSmsInbox })))
+  : null;
 
 interface FinanceViewProps {
   transactions: FinanceTransaction[];
@@ -523,12 +529,16 @@ export const FinanceView: React.FC<FinanceViewProps> = ({
         </Button>
       </div>
 
-      <BankSmsInbox
-        accounts={ledger.accounts}
-        transactions={transactions}
-        financeCategories={financeCategories}
-        onConfirm={onConfirmBankSms}
-      />
+      {BankSmsInbox && (
+        <Suspense fallback={null}>
+          <BankSmsInbox
+            accounts={ledger.accounts}
+            transactions={transactions}
+            financeCategories={financeCategories}
+            onConfirm={onConfirmBankSms}
+          />
+        </Suspense>
+      )}
 
       {/* Alert banner */}
       {financeAlerts.length > 0 && (
